@@ -53,7 +53,13 @@ jobs:
             echo "::error::RENDER_DEPLOY_HOOK secret is not set. Add it under Settings → Secrets → Actions."
             exit 1
           fi
-          curl -fsS -X POST "$DEPLOY_HOOK"
+          RESP=$(curl -fsS -X POST "$DEPLOY_HOOK")
+          echo "$RESP"
+          if echo "$RESP" | grep -qi "blueprint"; then
+            echo "::error::Wrong deploy hook — this URL is for the Blueprint sync, not the web service."
+            echo "Use the hook from Render → Web Service (aivana) → Settings → Deploy Hook."
+            exit 1
+          fi
 
       - name: Wait for deployment
         env:

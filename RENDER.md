@@ -108,6 +108,7 @@ SMTP_FROM=...
 | Issue | Fix |
 |-------|-----|
 | Actions deploy fails — no hook | Set `RENDER_DEPLOY_HOOK` in GitHub secrets |
+| Actions green but site unchanged | Hook must be from **Web Service → Settings → Deploy Hook**, not the Blueprint hook (Blueprint returns `sync started` and does not rebuild the app) |
 | Health check timeout | Free tier cold start can take 2–3 min; workflow waits up to 6 min |
 | Gmail OAuth fails | Match `APP_BASE_URL` / redirect URI with Google Console exactly |
 | Double deploys | Keep `autoDeploy: false` in `render.yaml` |
