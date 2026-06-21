@@ -1,14 +1,16 @@
-# Render Blueprint — free tier (see RENDER.md)
-# After deploy, set APP_BASE_URL and OAUTH_REDIRECT_URI to your *.onrender.com URL.
+# Render Blueprint for https://github.com/dudu-krish/aivana
+# CI/CD: GitHub Actions triggers deploy via RENDER_DEPLOY_HOOK (autoDeploy disabled).
+# After first deploy, set APP_BASE_URL and OAUTH_REDIRECT_URI in the Render dashboard.
 
 services:
   - type: web
-    name: agent-studio
+    name: aivana
     runtime: docker
     plan: free
     region: oregon
+    branch: master
+    autoDeploy: false
     healthCheckPath: /api/health
-    dockerCommand: ""
     envVars:
       - key: APP_SECRET
         generateValue: true

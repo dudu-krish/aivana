@@ -1,7 +1,7 @@
 {
   "name": "Agent Studio",
   "description": "Orchestrate AI agents — Gmail, calendar, WhatsApp, scrapers, and workflows.",
-  "repository": "https://github.com/YOUR_ORG/agent-studio",
+  "repository": "https://github.com/dudu-krish/aivana",
   "logo": "https://raw.githubusercontent.com/google/material-design-icons/master/png/action/android/materialicons/48dp/2x/baseline_android_black_48dp.png",
   "keywords": ["fastapi", "ai", "agents", "gmail", "workflow"],
   "stack": "heroku-24",
