@@ -341,6 +341,9 @@ const AgentApp = (() => {
     const hint = document.getElementById("gmail-hint");
     const btnConnect = document.getElementById("btn-connect-gmail");
     const btnDisconnect = document.getElementById("btn-disconnect-gmail");
+
+    AgentStudio.setGmailConnected?.(!!gmail?.connected);
+
     if (!hint) return;
 
     if (gmail?.connected) {

@@ -142,7 +142,20 @@ const AgentStudio = (() => {
   let userStoragePrefix = "guest";
   let activeUserId = null;
   let agentStatuses = {};
+  let gmailConnected = null;
   let selectedNodeId = null;
+
+  const GMAIL_AGENT_IDS = new Set(["gmail-organizer", "gmail-calendar"]);
+
+  function needsGmailConnection(agentId) {
+    return GMAIL_AGENT_IDS.has(agentId);
+  }
+
+  function setGmailConnected(connected) {
+    gmailConnected = !!connected;
+    renderNodes();
+    renderLibrary($("#search-agents")?.value || "");
+  }
   let contextNodeId = null;
   let connectingFrom = null;
   let connectCursor = null;
@@ -357,6 +370,7 @@ const AgentStudio = (() => {
     resultsQueue = [];
     activeResultId = null;
     savedAgentConfigs = {};
+    gmailConnected = null;
     resetCanvasState();
     closeAgentModal();
     closeResultModal();
@@ -1026,6 +1040,7 @@ const AgentStudio = (() => {
     Object.values(AGENT_DEFS).forEach((agent) => {
       if (q && !agent.name.toLowerCase().includes(q) && !agent.type.toLowerCase().includes(q)) return;
       const status = agentStatuses[agent.id] || "idle";
+      const gmailAlert = needsGmailConnection(agent.id) && gmailConnected === false;
       const li = document.createElement("li");
       li.className = "library-item";
       li.draggable = true;
@@ -1036,7 +1051,7 @@ const AgentStudio = (() => {
           <div class="library-name">${agent.name}</div>
           <div class="library-type">${agent.type}</div>
         </div>
-        <span class="status-dot ${status}" title="${status}"></span>
+        <span class="status-dot ${gmailAlert ? "gmail-alert" : status}" title="${gmailAlert ? "Connect Gmail" : status}"></span>
         <button class="library-menu" type="button" aria-label="Menu">⋯</button>
       `;
       li.addEventListener("dragstart", (e) => {
@@ -1141,9 +1156,10 @@ const AgentStudio = (() => {
       const title = node.label || cfg.name || agent.name;
       const elapsed = node.execTime != null ? `${node.execTime}s` : "—";
       const modelLabel = cfg.model || agent.model;
+      const gmailAlert = needsGmailConnection(node.agentId) && gmailConnected === false;
 
       const el = document.createElement("div");
-      el.className = `wf-node${selectedNodeId === node.id ? " selected" : ""}${status !== "idle" ? ` ${status}` : ""}`;
+      el.className = `wf-node${selectedNodeId === node.id ? " selected" : ""}${status !== "idle" ? ` ${status}` : ""}${gmailAlert ? " gmail-disconnected" : ""}`;
       el.dataset.nodeId = node.id;
       el.style.left = `${node.x}px`;
       el.style.top = `${node.y}px`;
@@ -1152,6 +1168,7 @@ const AgentStudio = (() => {
         <div class="wf-node-header">
           <span class="wf-node-icon">${agent.icon}</span>
           <span class="wf-node-title">${title}</span>
+          ${gmailAlert ? '<span class="gmail-connect-dot" title="Connect Gmail"></span>' : ""}
           <button class="wf-node-expand" type="button" aria-label="Expand">⤢</button>
         </div>
         <div class="wf-node-body">
@@ -1183,6 +1200,10 @@ const AgentStudio = (() => {
         showContextMenu(e.clientX, e.clientY, node.id);
       });
       el.querySelector(".wf-node-expand").addEventListener("click", (e) => {
+        e.stopPropagation();
+        openAgentModal(node.id);
+      });
+      el.querySelector(".gmail-connect-dot")?.addEventListener("click", (e) => {
         e.stopPropagation();
         openAgentModal(node.id);
       });
@@ -2140,6 +2161,7 @@ Telecaller`,
     getNodeConfig,
     saveSelectedNodeConfig,
     setAgentStatus,
+    setGmailConnected,
     highlightExecution,
     appendConsole,
     selectNodeByAgentId(agentId, openModal = false) {
