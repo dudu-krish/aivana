@@ -1,0 +1,74 @@
+{
+  "name": "Agent Studio",
+  "description": "Orchestrate AI agents — Gmail, calendar, WhatsApp, scrapers, and workflows.",
+  "repository": "https://github.com/YOUR_ORG/agent-studio",
+  "logo": "https://raw.githubusercontent.com/google/material-design-icons/master/png/action/android/materialicons/48dp/2x/baseline_android_black_48dp.png",
+  "keywords": ["fastapi", "ai", "agents", "gmail", "workflow"],
+  "stack": "heroku-24",
+  "buildpacks": [
+    { "url": "heroku/python" }
+  ],
+  "formation": {
+    "web": {
+      "quantity": 1,
+      "size": "eco"
+    }
+  },
+  "scripts": {
+    "postdeploy": "python -c \"from app.services.database import init_db; init_db()\""
+  },
+  "env": {
+    "APP_SECRET": {
+      "description": "Session signing secret (generate with: python -c \"import secrets; print(secrets.token_urlsafe(48))\")",
+      "required": true
+    },
+    "APP_BASE_URL": {
+      "description": "Public HTTPS URL, e.g. https://your-app.herokuapp.com",
+      "required": true
+    },
+    "OAUTH_REDIRECT_URI": {
+      "description": "Google OAuth callback, e.g. https://your-app.herokuapp.com/api/gmail/callback",
+      "required": true
+    },
+    "GOOGLE_CLIENT_SECRETS_JSON": {
+      "description": "Full contents of Google OAuth client_secret.json (single-line JSON)",
+      "required": true
+    },
+    "OPENAI_API_KEY": {
+      "description": "OpenAI API key for the planner agent",
+      "required": false
+    },
+    "TWILIO_ACCOUNT_SID": {
+      "description": "Twilio account SID for telecaller/WhatsApp",
+      "required": false
+    },
+    "TWILIO_AUTH_TOKEN": {
+      "description": "Twilio auth token",
+      "required": false
+    },
+    "TWILIO_FROM_NUMBER": {
+      "description": "Twilio phone number for outbound calls",
+      "required": false
+    },
+    "TWILIO_WHATSAPP_FROM": {
+      "description": "Twilio WhatsApp sender, e.g. whatsapp:+14155238886",
+      "required": false
+    },
+    "SMTP_HOST": {
+      "description": "SMTP host for the mailer agent",
+      "required": false
+    },
+    "SMTP_USER": {
+      "description": "SMTP username",
+      "required": false
+    },
+    "SMTP_PASSWORD": {
+      "description": "SMTP password",
+      "required": false
+    },
+    "SMTP_FROM": {
+      "description": "From address for outbound email",
+      "required": false
+    }
+  }
+}

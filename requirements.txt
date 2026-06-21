@@ -1,0 +1,3 @@
+# Heroku installs the app package (deps from pyproject.toml) plus the process manager.
+-e .
+gunicorn>=23.0.0

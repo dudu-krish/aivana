@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+credentials/
+token.json
+*.egg-info/
+dist/
+build/
+.DS_Store
+data/tenants/**/*
+!data/tenants/.gitkeep
+data/agent.db
