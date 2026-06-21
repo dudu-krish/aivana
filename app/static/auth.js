@@ -69,6 +69,7 @@ const Auth = (() => {
     $("#tab-register").classList.toggle("active", !isLogin);
     show(isLogin ? $("#form-login") : $("#form-register"));
     hide(isLogin ? $("#form-register") : $("#form-login"));
+    $(".auth-card")?.classList.toggle("auth-card--register", !isLogin);
     clearError();
   }
 

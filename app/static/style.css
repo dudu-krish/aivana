@@ -65,11 +65,15 @@ body {
 
 /* ── Auth ── */
 .auth-screen {
-  min-height: 100vh;
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  padding: 2rem;
+  padding: 1.25rem 1rem 2rem;
   background: var(--md-surface-dim);
 }
 
@@ -79,7 +83,44 @@ body {
   padding: 2.5rem;
   width: 100%;
   max-width: 400px;
+  margin: auto 0;
+  flex-shrink: 0;
   box-shadow: var(--shadow-3);
+}
+
+/* Register form has more fields — hide marketing list to save space */
+.auth-card:has(#form-register:not(.hidden)) .auth-features,
+.auth-card.auth-card--register .auth-features {
+  display: none;
+}
+.auth-card:has(#form-register:not(.hidden)) .auth-sub,
+.auth-card.auth-card--register .auth-sub {
+  display: none;
+}
+.auth-card:has(#form-register:not(.hidden)),
+.auth-card.auth-card--register {
+  padding: 1.75rem 2rem 1.75rem;
+}
+.auth-card:has(#form-register:not(.hidden)) .auth-server-status,
+.auth-card.auth-card--register .auth-server-status {
+  display: none;
+}
+.auth-card:has(#form-register:not(.hidden)) .auth-form,
+.auth-card.auth-card--register .auth-form {
+  gap: 0.75rem;
+}
+.auth-card:has(#form-register:not(.hidden)) .auth-form-fields,
+.auth-card.auth-card--register .auth-form-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  max-height: min(22rem, calc(100dvh - 15rem));
+  overflow-y: auto;
+  padding-right: 0.15rem;
+}
+.auth-card:has(#form-register:not(.hidden)) .auth-form-submit,
+.auth-card.auth-card--register .auth-form-submit {
+  flex-shrink: 0;
 }
 
 .auth-logo {
@@ -123,9 +164,13 @@ body {
 
 .auth-error { color: var(--md-error); font-size: 0.85rem; margin-top: 0.75rem; text-align: center; }
 .auth-server-status {
-  font-size: 0.82rem; margin-top: 0.75rem; text-align: center;
-  padding: 0.6rem 0.75rem; border-radius: var(--radius-md);
+  font-size: 0.78rem; margin: 0 0 1rem; text-align: center;
+  padding: 0.45rem 0.65rem; border-radius: var(--radius-md);
   background: #FEF7E0; color: #B06000;
+}
+.auth-card.auth-card--register .auth-server-status,
+.auth-card:has(#form-register:not(.hidden)) .auth-server-status {
+  margin-bottom: 0.75rem;
 }
 .auth-server-status.online { background: #E6F4EA; color: var(--md-success); }
 

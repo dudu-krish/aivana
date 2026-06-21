@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/style.css?v=29" />
 </head>
 <body>
   <!-- Auth -->
@@ -18,6 +18,7 @@
         <h1>Agent Studio</h1>
       </div>
       <p class="auth-sub">Orchestrate AI agents on your own data — Gmail, invoices, calls & email</p>
+      <p id="auth-server-status" class="auth-server-status hidden"></p>
       <ul class="auth-features">
         <li>Connect your Gmail — labels applied automatically</li>
         <li>Build visual workflows — drag, connect, run</li>
@@ -38,33 +39,34 @@
         <button type="submit" class="btn btn-filled btn-block" id="btn-login-submit">Sign in</button>
       </form>
       <form id="form-register" class="auth-form hidden">
-        <div class="input-wrap">
-          <input type="text" id="register-name" placeholder="Your name" required autocomplete="name" />
+        <div class="auth-form-fields">
+          <div class="input-wrap">
+            <input type="text" id="register-name" placeholder="Your name" required autocomplete="name" />
+          </div>
+          <div class="input-wrap">
+            <input type="email" id="register-email" placeholder="Email" required autocomplete="email" />
+          </div>
+          <div class="input-wrap password-wrap">
+            <input type="password" id="register-password" placeholder="Password (8+ characters)" required minlength="8" autocomplete="new-password" />
+            <button type="button" class="password-toggle" aria-label="Show password">👁</button>
+          </div>
+          <div class="input-wrap password-wrap">
+            <input type="password" id="register-confirm" placeholder="Confirm password" required minlength="8" autocomplete="new-password" />
+            <button type="button" class="password-toggle" aria-label="Show password">👁</button>
+          </div>
+          <div class="input-wrap">
+            <label class="input-label" for="register-use-case">What do you want to automate?</label>
+            <select id="register-use-case" class="auth-select">
+              <option value="all">Everything — email, invoices, support & outreach</option>
+              <option value="email">Email organization & Gmail labels</option>
+              <option value="invoices">Invoice & payment reconciliation</option>
+              <option value="support">Customer support callbacks</option>
+            </select>
+          </div>
         </div>
-        <div class="input-wrap">
-          <input type="email" id="register-email" placeholder="Email" required autocomplete="email" />
-        </div>
-        <div class="input-wrap password-wrap">
-          <input type="password" id="register-password" placeholder="Password (8+ characters)" required minlength="8" autocomplete="new-password" />
-          <button type="button" class="password-toggle" aria-label="Show password">👁</button>
-        </div>
-        <div class="input-wrap password-wrap">
-          <input type="password" id="register-confirm" placeholder="Confirm password" required minlength="8" autocomplete="new-password" />
-          <button type="button" class="password-toggle" aria-label="Show password">👁</button>
-        </div>
-        <div class="input-wrap">
-          <label class="input-label" for="register-use-case">What do you want to automate?</label>
-          <select id="register-use-case" class="auth-select">
-            <option value="all">Everything — email, invoices, support & outreach</option>
-            <option value="email">Email organization & Gmail labels</option>
-            <option value="invoices">Invoice & payment reconciliation</option>
-            <option value="support">Customer support callbacks</option>
-          </select>
-        </div>
-        <button type="submit" class="btn btn-filled btn-block" id="btn-register-submit">Create account</button>
+        <button type="submit" class="btn btn-filled btn-block auth-form-submit" id="btn-register-submit">Create account</button>
       </form>
       <p id="auth-error" class="auth-error hidden"></p>
-      <p id="auth-server-status" class="auth-server-status hidden"></p>
     </div>
   </div>
 
@@ -301,7 +303,7 @@
 
   <script src="/static/studio.js?v=25"></script>
   <script src="/static/onboarding.js?v=23"></script>
-  <script src="/static/auth.js?v=21"></script>
+  <script src="/static/auth.js?v=22"></script>
   <script src="/static/app.js?v=25"></script>
 </body>
 </html>
