@@ -1,14 +1,8 @@
-name: CI/CD — Heroku
+name: CI/CD - Heroku
 
+# Manual only — use render-deploy.yml for automatic deploys.
 on:
-  push:
-    branches: [master]
-  pull_request:
-    branches: [master]
-
-concurrency:
-  group: heroku-${{ github.ref }}
-  cancel-in-progress: true
+  workflow_dispatch:
 
 jobs:
   test:
@@ -38,11 +32,7 @@ jobs:
   deploy:
     name: Deploy to Heroku
     needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
-    environment:
-      name: production
-      url: https://${{ secrets.HEROKU_APP_NAME }}.herokuapp.com
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -56,6 +46,12 @@ jobs:
           branch: master
 
       - name: Verify deployment
+        env:
+          APP_NAME: ${{ secrets.HEROKU_APP_NAME }}
         run: |
+          if [ -z "$APP_NAME" ]; then
+            echo "::error::HEROKU_APP_NAME secret is not set."
+            exit 1
+          fi
           sleep 15
-          curl -fsS "https://${{ secrets.HEROKU_APP_NAME }}.herokuapp.com/api/health"
+          curl -fsS "https://${APP_NAME}.herokuapp.com/api/health"

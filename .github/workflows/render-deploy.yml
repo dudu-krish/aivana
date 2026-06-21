@@ -1,10 +1,11 @@
-name: CI/CD — Render
+name: CI/CD - Render
 
 on:
   push:
     branches: [master]
   pull_request:
     branches: [master]
+  workflow_dispatch:
 
 concurrency:
   group: render-${{ github.ref }}
@@ -40,23 +41,24 @@ jobs:
     needs: test
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
-    environment:
-      name: production
-      url: ${{ secrets.RENDER_SERVICE_URL }}
+    environment: production
     steps:
       - name: Trigger Render deploy
+        env:
+          DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
         run: |
-          if [ -z "${{ secrets.RENDER_DEPLOY_HOOK }}" ]; then
-            echo "RENDER_DEPLOY_HOOK secret is not set. See RENDER.md"
+          if [ -z "$DEPLOY_HOOK" ]; then
+            echo "::error::RENDER_DEPLOY_HOOK secret is not set. Add it under Settings → Secrets → Actions."
             exit 1
           fi
-          curl -fsS -X POST "${{ secrets.RENDER_DEPLOY_HOOK }}"
+          curl -fsS -X POST "$DEPLOY_HOOK"
 
       - name: Wait for deployment
+        env:
+          BASE: ${{ secrets.RENDER_SERVICE_URL }}
         run: |
-          BASE="${{ secrets.RENDER_SERVICE_URL }}"
           if [ -z "$BASE" ]; then
-            echo "RENDER_SERVICE_URL secret is not set. See RENDER.md"
+            echo "::error::RENDER_SERVICE_URL secret is not set. Example: https://aivana.onrender.com"
             exit 1
           fi
           HEALTH="${BASE%/}/api/health"
@@ -67,7 +69,7 @@ jobs:
               echo "Deployment healthy."
               exit 0
             fi
-            echo "Attempt $i/36 — not ready yet, retrying in 10s..."
+            echo "Attempt $i/36 - not ready yet, retrying in 10s..."
             sleep 10
           done
           echo "Health check timed out after 6 minutes."
