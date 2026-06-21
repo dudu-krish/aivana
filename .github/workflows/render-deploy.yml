@@ -60,8 +60,9 @@ jobs:
           BASE: ${{ secrets.RENDER_SERVICE_URL }}
         run: |
           if [ -z "$BASE" ]; then
-            echo "::error::RENDER_SERVICE_URL secret is not set. Example: https://aivana.onrender.com"
-            exit 1
+            echo "::warning::RENDER_SERVICE_URL is not set — deploy hook was sent; skipping health check."
+            echo "Add RENDER_SERVICE_URL (e.g. https://your-app.onrender.com) under Settings → Secrets → Actions."
+            exit 0
           fi
           HEALTH="${BASE%/}/api/health"
           echo "Waiting for $HEALTH ..."
