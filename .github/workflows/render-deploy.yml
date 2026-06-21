@@ -39,7 +39,9 @@ jobs:
   deploy:
     name: Deploy to Render
     needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    if: >
+      (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
+      github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     environment: production
     steps:
