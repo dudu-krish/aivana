@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 from app.agents.base import BaseAgent
+from app.agents.understanding_registry import UNDERSTANDING_AGENTS
 from app.services.event_bus import event_bus
 from app.services.llm import LLMError, complete_json, llm_configured
 from app.services.tenant import TenantContext
@@ -66,6 +67,9 @@ AGENT_KEYWORDS: dict[str, list[str]] = {
     "data-scraper": ["scrape", "scraper", "crawl", "extract data", "web data", "fetch page"],
     "file-download": ["download", "save file", "fetch file", "get file", "pull file"],
 }
+
+for _uid, _meta in UNDERSTANDING_AGENTS.items():
+    AGENT_KEYWORDS[_uid] = list(_meta.get("keywords") or [])
 
 CALL_INTENT_PHRASES = [
     "call back", "callback", "call me", "please call", "ring me",

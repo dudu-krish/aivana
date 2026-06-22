@@ -27,6 +27,8 @@ from app.agents.invoice_matcher import InvoiceMatcherAgent
 from app.agents.mailer import MailerAgent
 from app.agents.planner import PlannerAgent
 from app.agents.telecaller import TelecallerAgent
+from app.agents.understanding import UnderstandingAgent
+from app.agents.understanding_registry import UNDERSTANDING_AGENTS, is_understanding_agent
 from app.agents.whatsapp import WhatsAppAgent
 from app.api.deps import SESSION_COOKIE, get_current_user, get_tenant
 from app.services.auth import resolve_session, resolve_ws_ticket
@@ -113,6 +115,13 @@ class DataScraperRequest(AgentRunContext):
 class FileDownloadRequest(AgentRunContext):
     urls: list[str] = []
     filenames: list[str] = []
+
+
+class UnderstandingRequest(AgentRunContext):
+    agent_id: str
+    text: str = ""
+    reference_text: str = ""
+    agent_config: dict[str, Any] | None = None
 
 
 def _run_key(user_id: str, agent_id: str) -> str:
@@ -670,6 +679,38 @@ async def run_file_download(
     )
 
 
+@router.post("/agents/understanding/run", response_model=RunResponse)
+async def run_understanding_agent(
+    background_tasks: BackgroundTasks,
+    body: UnderstandingRequest,
+    tenant: Annotated[TenantContext, Depends(get_tenant)],
+) -> RunResponse:
+    agent_id = body.agent_id.strip()
+    if not is_understanding_agent(agent_id):
+        raise HTTPException(status_code=404, detail=f"Unknown understanding agent: {agent_id}")
+
+    key = _run_key(tenant.user_id, agent_id)
+    if _running.get(key):
+        raise HTTPException(status_code=409, detail=f"{UNDERSTANDING_AGENTS[agent_id]['name']} is already running")
+
+    agent = UnderstandingAgent(tenant, agent_id)
+    background_tasks.add_task(
+        _run_agent,
+        key,
+        agent.run(
+            text=body.text,
+            reference_text=body.reference_text,
+            agent_config=body.agent_config,
+        ),
+        body.run_id,
+    )
+    return RunResponse(
+        agent_id=agent_id,
+        status="started",
+        message=f"Running {UNDERSTANDING_AGENTS[agent_id]['name']}",
+    )
+
+
 @router.get("/queue")
 async def list_result_queue(
     user: Annotated[dict, Depends(get_current_user)],
@@ -713,7 +754,7 @@ async def clear_result_queue(
 @router.get("/agents/status")
 async def agents_status(user: Annotated[dict, Depends(get_current_user)]) -> dict[str, bool]:
     uid = user["id"]
-    return {
+    status = {
         "invoice-matcher": _running.get(_run_key(uid, "invoice-matcher"), False),
         "gmail-organizer": _running.get(_run_key(uid, "gmail-organizer"), False),
         "gmail-calendar": _running.get(_run_key(uid, "gmail-calendar"), False),
@@ -723,3 +764,6 @@ async def agents_status(user: Annotated[dict, Depends(get_current_user)]) -> dic
         "data-scraper": _running.get(_run_key(uid, "data-scraper"), False),
         "file-download": _running.get(_run_key(uid, "file-download"), False),
     }
+    for agent_id in UNDERSTANDING_AGENTS:
+        status[agent_id] = _running.get(_run_key(uid, agent_id), False)
+    return status

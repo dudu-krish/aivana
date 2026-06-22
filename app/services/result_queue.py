@@ -38,8 +38,13 @@ def enqueue_from_event(event: AgentEvent) -> str:
     return result_id
 
 
-def list_results(user_id: str, *, limit: int = 50) -> list[dict[str, Any]]:
-    return list_agent_results(user_id, limit=limit)
+def list_results(
+    user_id: str,
+    *,
+    limit: int = 50,
+    agent_id: str | None = None,
+) -> list[dict[str, Any]]:
+    return list_agent_results(user_id, limit=limit, agent_id=agent_id)
 
 
 def get_result(user_id: str, result_id: str) -> dict[str, Any] | None:

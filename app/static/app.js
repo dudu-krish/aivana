@@ -563,6 +563,22 @@ const AgentApp = (() => {
         filenames: config.filenames || [],
         ...runPayload,
       });
+    } else if (agent?.category === "understanding") {
+      let text = (config.text || "").trim();
+      if (!text && nodeId) {
+        text = (await resolveUpstreamInputText(nodeId)).trim();
+      }
+      await api("/api/agents/understanding/run", "POST", {
+        agent_id: agentId,
+        text,
+        reference_text: config.reference_text || "",
+        agent_config: {
+          prompt: config.prompt,
+          model: config.model,
+          temperature: config.temperature,
+        },
+        ...runPayload,
+      });
     }
     return null;
   }
@@ -658,6 +674,96 @@ const AgentApp = (() => {
 
   function delay(ms) {
     return new Promise((r) => setTimeout(r, ms));
+  }
+
+  function formatGmailSummaries(summaries) {
+    if (!Array.isArray(summaries) || !summaries.length) return "";
+    return summaries
+      .map((s) => {
+        const parts = [
+          s.subject ? `Subject: ${s.subject}` : "",
+          s.from ? `From: ${s.from}` : "",
+          s.category ? `Category: ${s.category}` : "",
+          s.body_preview || s.snippet || "",
+        ].filter(Boolean);
+        return parts.join("\n");
+      })
+      .join("\n\n---\n\n");
+  }
+
+  function extractTextFromResult(agentId, row) {
+    if (!row) return "";
+    const payload = row.result || {};
+    const agent = AgentStudio.getAgent(agentId);
+
+    if (agentId === "gmail-organizer" || agentId === "planner") {
+      const summaries = payload.email_summaries
+        || payload.chart_data?.email_summaries;
+      const text = formatGmailSummaries(summaries);
+      if (text) return text;
+      if (agentId === "planner" && payload.reasoning) {
+        return String(payload.reasoning);
+      }
+    }
+
+    if (agentId === "data-scraper") {
+      const results = payload.results || [];
+      if (results.length) {
+        return results
+          .map((r) => [r.title, r.text_preview].filter(Boolean).join("\n"))
+          .join("\n\n---\n\n");
+      }
+    }
+
+    if (agent?.category === "understanding") {
+      const inner = payload.result;
+      if (typeof inner === "string") return inner;
+      if (inner && typeof inner === "object") {
+        return JSON.stringify(inner, null, 2);
+      }
+    }
+
+    if (payload.body_preview) return String(payload.body_preview);
+    if (payload.text) return String(payload.text);
+    if (payload.text_preview) return String(payload.text_preview);
+    if (row.message) return String(row.message);
+
+    try {
+      const copy = { ...payload };
+      delete copy.event_type;
+      delete copy.run_id;
+      delete copy.result_id;
+      delete copy.email_categories;
+      delete copy.attachment_categories;
+      const keys = Object.keys(copy);
+      if (keys.length) return JSON.stringify(copy, null, 2).slice(0, 12000);
+    } catch (_) {
+      /* ignore */
+    }
+    return "";
+  }
+
+  async function fetchLatestAgentResult(agentId) {
+    try {
+      return await api(`/api/queue/latest/${encodeURIComponent(agentId)}`);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  async function resolveUpstreamInputText(nodeId) {
+    const upstreamIds = AgentStudio.getUpstreamNodeIds?.(nodeId) || [];
+    if (!upstreamIds.length) return "";
+
+    const chunks = [];
+    for (const upId of upstreamIds) {
+      const upNode = AgentStudio.getNodeById?.(upId);
+      if (!upNode?.agentId) continue;
+      const row = await fetchLatestAgentResult(upNode.agentId);
+      const text = extractTextFromResult(upNode.agentId, row);
+      if (text.trim()) chunks.push(text.trim());
+    }
+    return chunks.join("\n\n===\n\n");
   }
 
   return {

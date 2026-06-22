@@ -2,9 +2,15 @@
  * Agent Studio — canvas, workflow, and UI orchestration
  */
 const AgentStudio = (() => {
+  function renderMaterialIcon(name, variant = "default") {
+    const icon = String(name || "smart_toy").replace(/[^a-z0-9_]/gi, "");
+    const cls = variant === "library" ? " agent-mat-icon--library" : variant === "node" ? " agent-mat-icon--node" : "";
+    return `<span class="material-symbols-outlined agent-mat-icon${cls}" aria-hidden="true">${icon}</span>`;
+  }
+
   const AGENT_DEFS = {
     "invoice-matcher": {
-      id: "invoice-matcher", name: "Invoice Matcher", icon: "📋",
+      id: "invoice-matcher", name: "Invoice Matcher", icon: "receipt_long",
       type: "Reconciliation", runnable: true,
       description: "Pull invoice & payment data, reconcile matches, surface exceptions.",
       prompt: "Match invoices to payments by vendor, reference, and amount. Flag mismatches.",
@@ -13,7 +19,7 @@ const AgentStudio = (() => {
       tools: ["pandas", "excel-reader"],
     },
     "gmail-organizer": {
-      id: "gmail-organizer", name: "Gmail Organizer", icon: "📧",
+      id: "gmail-organizer", name: "Gmail Organizer", icon: "mail",
       type: "Email", runnable: true,
       description: "Connect Gmail, scan emails, apply category labels, and organize attachments.",
       prompt: "Read each email, categorize it, apply the matching Gmail label, and file attachments.",
@@ -22,7 +28,7 @@ const AgentStudio = (() => {
       tools: ["gmail-api", "file-organizer"],
     },
     "pdf-reader": {
-      id: "pdf-reader", name: "PDF Reader", icon: "📄",
+      id: "pdf-reader", name: "PDF Reader", icon: "picture_as_pdf",
       type: "Document", runnable: false,
       description: "Extract and summarize text from PDF documents.",
       prompt: "Read PDF content and extract structured data.",
@@ -31,7 +37,7 @@ const AgentStudio = (() => {
       tools: ["pdf-parser"],
     },
     "web-search": {
-      id: "web-search", name: "Web Search", icon: "🌐",
+      id: "web-search", name: "Web Search", icon: "travel_explore",
       type: "Research", runnable: false,
       description: "Search the web and return relevant results.",
       prompt: "Search for information and return cited results.",
@@ -40,7 +46,7 @@ const AgentStudio = (() => {
       tools: ["web-search"],
     },
     "planner": {
-      id: "planner", name: "Planner", icon: "🧠",
+      id: "planner", name: "Planner", icon: "account_tree",
       type: "Orchestration", runnable: true,
       description: "Break down tasks and route to appropriate agents.",
       prompt: "Analyze user input and create an execution plan.",
@@ -49,7 +55,7 @@ const AgentStudio = (() => {
       tools: ["reasoning"],
     },
     "speech-agent": {
-      id: "speech-agent", name: "Speech Agent", icon: "🎤",
+      id: "speech-agent", name: "Speech Agent", icon: "mic",
       type: "Audio", runnable: false,
       description: "Transcribe and process speech input.",
       prompt: "Convert speech to text and extract intent.",
@@ -58,7 +64,7 @@ const AgentStudio = (() => {
       tools: ["speech-to-text"],
     },
     "chat-agent": {
-      id: "chat-agent", name: "Chat Agent", icon: "💬",
+      id: "chat-agent", name: "Chat Agent", icon: "forum",
       type: "Conversation", runnable: false,
       description: "Handle conversational interactions with memory.",
       prompt: "Respond naturally while maintaining context.",
@@ -67,7 +73,7 @@ const AgentStudio = (() => {
       tools: ["memory"],
     },
     "analytics": {
-      id: "analytics", name: "Analytics", icon: "📊",
+      id: "analytics", name: "Analytics", icon: "bar_chart",
       type: "Insights", runnable: false,
       description: "Generate insights and visualizations from agent outputs.",
       prompt: "Analyze data and produce summary metrics.",
@@ -76,7 +82,7 @@ const AgentStudio = (() => {
       tools: ["chart-builder"],
     },
     "telecaller": {
-      id: "telecaller", name: "Telecaller", icon: "📞",
+      id: "telecaller", name: "Telecaller", icon: "headset_mic",
       type: "Outreach", runnable: true,
       description: "Place outbound calls to phone numbers and speak a greeting.",
       prompt: "Call each number and say hello in a clear, friendly voice.",
@@ -85,7 +91,7 @@ const AgentStudio = (() => {
       tools: ["twilio-voice"],
     },
     "mailer": {
-      id: "mailer", name: "Mailer", icon: "✉️",
+      id: "mailer", name: "Mailer", icon: "send",
       type: "Email", runnable: true,
       description: "Send emails to one or more recipients.",
       prompt: "Compose and send the configured email to all recipients.",
@@ -94,7 +100,7 @@ const AgentStudio = (() => {
       tools: ["smtp"],
     },
     "gmail-calendar": {
-      id: "gmail-calendar", name: "Gmail Calendar", icon: "📅",
+      id: "gmail-calendar", name: "Gmail Calendar", icon: "calendar_today",
       type: "Calendar", runnable: true,
       description: "List or create Google Calendar events using your connected account.",
       prompt: "Read calendar events for the date range, or create a new meeting.",
@@ -103,7 +109,7 @@ const AgentStudio = (() => {
       tools: ["google-calendar-api"],
     },
     "whatsapp": {
-      id: "whatsapp", name: "WhatsApp", icon: "💬",
+      id: "whatsapp", name: "WhatsApp", icon: "chat_bubble",
       type: "Messaging", runnable: true,
       description: "Send WhatsApp messages to phone numbers via Twilio.",
       prompt: "Send the configured WhatsApp message to each recipient.",
@@ -112,7 +118,7 @@ const AgentStudio = (() => {
       tools: ["twilio-whatsapp"],
     },
     "data-scraper": {
-      id: "data-scraper", name: "Data Scraper", icon: "🕷️",
+      id: "data-scraper", name: "Data Scraper", icon: "language",
       type: "Research", runnable: true,
       description: "Fetch web pages and extract text, links, and structured data.",
       prompt: "Scrape each URL, extract content, and save JSON results.",
@@ -121,15 +127,67 @@ const AgentStudio = (() => {
       tools: ["httpx", "beautifulsoup"],
     },
     "file-download": {
-      id: "file-download", name: "File Download", icon: "⬇️",
-      type: "Files", runnable: true,
+      id: "file-download", name: "File Download", icon: "download",
+      type: "Files", category: "action", runnable: true,
       description: "Download files from URLs into your workspace storage.",
       prompt: "Download each file URL and save it to the downloads folder.",
       model: "gpt-4o-mini", temperature: 0,
       inputs: ["urls"], outputs: ["saved_files"],
       tools: ["httpx"],
     },
+    ...buildUnderstandingAgentDefs(),
   };
+
+  function buildUnderstandingAgentDefs() {
+    const specs = [
+      ["intent-detection", "Intent Detection", "ads_click", "Detect the primary user intent(s) in text."],
+      ["topic-detection", "Topic Detection", "label", "Identify main topics discussed in text."],
+      ["language-detection", "Language Detection", "translate", "Detect the language of the input text."],
+      ["entity-extraction", "Entity Extraction", "category", "Extract named entities from text."],
+      ["keyword-extraction", "Keyword Extraction", "key", "Extract important keywords and phrases."],
+      ["relationship-extraction", "Relationship Extraction", "device_hub", "Extract relationships between entities."],
+      ["event-detection", "Event Detection", "event", "Detect events mentioned in text."],
+      ["date-extraction", "Date Extraction", "calendar_month", "Extract dates and time expressions."],
+      ["location-extraction", "Location Extraction", "location_on", "Extract locations and addresses."],
+      ["person-extraction", "Person Extraction", "person", "Extract person names and roles."],
+      ["organization-extraction", "Organization Extraction", "corporate_fare", "Extract companies and institutions."],
+      ["product-extraction", "Product Extraction", "inventory_2", "Extract products and service names."],
+      ["emotion-detection", "Emotion Detection", "mood", "Detect emotions expressed in text."],
+      ["sentiment-detection", "Sentiment Detection", "thumb_up", "Classify overall sentiment."],
+      ["urgency-detection", "Urgency Detection", "priority_high", "Assess urgency of the message."],
+      ["risk-detection", "Risk Detection", "warning", "Identify risks and compliance red flags."],
+      ["spam-detection", "Spam Detection", "block", "Detect spam or unwanted content."],
+      ["duplicate-detection", "Duplicate Detection", "content_copy", "Compare text to a reference for duplication."],
+      ["similarity-detection", "Similarity Detection", "compare", "Score similarity between two texts."],
+      ["root-cause-finder", "Root Cause Finder", "troubleshoot", "Infer likely root causes from problems."],
+    ];
+    return Object.fromEntries(
+      specs.map(([id, name, icon, description]) => [
+        id,
+        {
+          id,
+          name,
+          icon,
+          type: "Understanding",
+          category: "understanding",
+          runnable: true,
+          needsReference: id === "duplicate-detection" || id === "similarity-detection",
+          description,
+          prompt: `Perform ${name.toLowerCase()} on the input text and return structured findings.`,
+          model: "gpt-4o-mini",
+          temperature: 0.1,
+          inputs: ["text"],
+          outputs: ["analysis"],
+          tools: ["nlp"],
+        },
+      ])
+    );
+  }
+
+  function isUnderstandingAgent(agentId) {
+    const agent = AGENT_DEFS[agentId];
+    return agent?.category === "understanding";
+  }
 
   const EMPTY_WORKFLOW = { nodes: [], edges: [] };
 
@@ -631,6 +689,13 @@ const AgentStudio = (() => {
         filenames: parseListField(document.getElementById("download-filenames")?.value),
       };
     }
+    if (isUnderstandingAgent(node.agentId)) {
+      return {
+        ...base,
+        text: document.getElementById("understanding-text")?.value?.trim() || "",
+        reference_text: document.getElementById("understanding-reference")?.value?.trim() || "",
+      };
+    }
     return { ...(node.config || {}), ...base };
   }
 
@@ -1031,35 +1096,69 @@ const AgentStudio = (() => {
     }
   }
 
+  function shortAgentLabel(name) {
+    const word = name.split(/\s+/)[0] || name;
+    return word.toUpperCase().slice(0, 9);
+  }
+
   function renderLibrary(filter = "") {
     const list = $("#agent-library");
     if (!list) return;
     const q = filter.toLowerCase();
     list.innerHTML = "";
 
-    Object.values(AGENT_DEFS).forEach((agent) => {
-      if (q && !agent.name.toLowerCase().includes(q) && !agent.type.toLowerCase().includes(q)) return;
-      const status = agentStatuses[agent.id] || "idle";
-      const gmailAlert = needsGmailConnection(agent.id) && gmailConnected === false;
-      const li = document.createElement("li");
-      li.className = "library-item";
-      li.draggable = true;
-      li.dataset.agentId = agent.id;
-      li.innerHTML = `
-        <span class="library-icon">${agent.icon}</span>
-        <div class="library-info">
-          <div class="library-name">${agent.name}</div>
-          <div class="library-type">${agent.type}</div>
-        </div>
-        <span class="status-dot ${gmailAlert ? "gmail-alert" : status}" title="${gmailAlert ? "Connect Gmail" : status}"></span>
-        <button class="library-menu" type="button" aria-label="Menu">⋯</button>
-      `;
-      li.addEventListener("dragstart", (e) => {
-        e.dataTransfer.setData("agentId", agent.id);
-        li.classList.add("dragging");
+    const groups = [
+      { key: "action", label: "Agents" },
+      { key: "understanding", label: "Understanding" },
+    ];
+
+    groups.forEach((group) => {
+      const agents = Object.values(AGENT_DEFS).filter((agent) => {
+        const cat = agent.category || "action";
+        if (cat !== group.key) return false;
+        if (q && !agent.name.toLowerCase().includes(q) && !agent.type.toLowerCase().includes(q)) return false;
+        return true;
       });
-      li.addEventListener("dragend", () => li.classList.remove("dragging"));
-      list.appendChild(li);
+      if (!agents.length) return;
+
+      const section = document.createElement("li");
+      section.className = "library-section-block";
+      section.innerHTML = `<div class="library-section-header">${group.label}</div>`;
+
+      const grid = document.createElement("div");
+      grid.className = "library-grid-wrap";
+      const gridInner = document.createElement("ul");
+      gridInner.className = "agent-library-grid";
+
+      agents.forEach((agent) => {
+        const status = agentStatuses[agent.id] || "idle";
+        const gmailAlert = needsGmailConnection(agent.id) && gmailConnected === false;
+        const li = document.createElement("li");
+        li.className = "library-item library-card";
+        li.draggable = true;
+        li.dataset.agentId = agent.id;
+        li.dataset.name = agent.name;
+        li.setAttribute("aria-label", agent.name);
+        li.title = agent.name;
+        li.innerHTML = `
+          <div class="library-card-icon-wrap">
+            ${renderMaterialIcon(agent.icon, "library")}
+            <span class="status-dot ${gmailAlert ? "gmail-alert" : status}" title="${gmailAlert ? "Connect Gmail" : status}"></span>
+          </div>
+          <span class="library-card-name">${shortAgentLabel(agent.name)}</span>
+          <span class="library-card-tooltip">${agent.name}</span>
+        `;
+        li.addEventListener("dragstart", (e) => {
+          e.dataTransfer.setData("agentId", agent.id);
+          li.classList.add("dragging");
+        });
+        li.addEventListener("dragend", () => li.classList.remove("dragging"));
+        gridInner.appendChild(li);
+      });
+
+      grid.appendChild(gridInner);
+      section.appendChild(grid);
+      list.appendChild(section);
     });
   }
 
@@ -1166,7 +1265,7 @@ const AgentStudio = (() => {
       el.innerHTML = `
         <div class="wf-port in"></div>
         <div class="wf-node-header">
-          <span class="wf-node-icon">${agent.icon}</span>
+          <span class="wf-node-icon">${renderMaterialIcon(agent.icon, "node")}</span>
           <span class="wf-node-title">${title}</span>
           ${gmailAlert ? '<span class="gmail-connect-dot" title="Connect Gmail"></span>' : ""}
           <button class="wf-node-expand" type="button" aria-label="Expand">⤢</button>
@@ -1372,6 +1471,24 @@ const AgentStudio = (() => {
           <label>Filenames (optional, one per line)</label>
           <textarea id="download-filenames" rows="3" placeholder="report.pdf">${escapeHtml(names)}</textarea>
           <p class="prop-hint">Files saved to your downloads folder.</p>
+        </div>`;
+    }
+    if (isUnderstandingAgent(agent.id)) {
+      const refBlock = agent.needsReference
+        ? `
+          <label>Reference Text</label>
+          <textarea id="understanding-reference" rows="4" placeholder="Text to compare against…">${escapeHtml(cfg.reference_text || "")}</textarea>`
+        : "";
+      const upstreamHint = hasUpstreamNodes(node.id)
+        ? `<p class="prop-hint">Leave input blank to use output from connected upstream agent(s).</p>`
+        : "";
+      extra = `
+        <div class="prop-group prop-actions">
+          <label>Input Text</label>
+          <textarea id="understanding-text" rows="6" placeholder="Paste or type text to analyze…">${escapeHtml(cfg.text || "")}</textarea>
+          ${refBlock}
+          ${upstreamHint}
+          <p class="prop-hint">Uses OpenAI when configured; otherwise rule-based analysis.</p>
         </div>`;
     }
     if (node.id === "n-input") {
@@ -1623,7 +1740,9 @@ const AgentStudio = (() => {
       if (!action || !contextNodeId) return;
       const node = workflow.nodes.find((n) => n.id === contextNodeId);
       if (action === "edit") openAgentModal(contextNodeId);
-      if (action === "run" && node && window.AgentApp) window.AgentApp.runAgent(node.agentId);
+      if (action === "run" && node && window.AgentApp) {
+        window.AgentApp.runAgent(node.agentId, { nodeId: node.id, config: getNodeConfig(node.id) });
+      }
       if (action === "duplicate" && node) {
         workflow.nodes.push({
           ...structuredClone(node),
@@ -1733,6 +1852,18 @@ const AgentStudio = (() => {
         if (node) ids.push(node.agentId);
       });
     return [...new Set(ids)];
+  }
+
+  function getUpstreamNodeIds(nodeId) {
+    return workflow.edges.filter((edge) => edge.to === nodeId).map((edge) => edge.from);
+  }
+
+  function getNodeById(nodeId) {
+    return workflow.nodes.find((n) => n.id === nodeId) || null;
+  }
+
+  function hasUpstreamNodes(nodeId) {
+    return getUpstreamNodeIds(nodeId).length > 0;
   }
 
   function applyPlannerResult(plan) {
@@ -2189,6 +2320,9 @@ Telecaller`,
     getRunnableNodes,
     getExecutionOrder,
     getDownstreamAgentIds,
+    getUpstreamNodeIds,
+    getNodeById,
+    hasUpstreamNodes,
     applyPlannerResult,
     getWorkflowTask,
     setWorkflowTask,
