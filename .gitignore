@@ -12,3 +12,5 @@ build/
 data/tenants/**/*
 !data/tenants/.gitkeep
 data/agent.db
+data/kb_vectors.db
+data/kb_turbovec/

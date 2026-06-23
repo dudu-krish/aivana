@@ -53,6 +53,31 @@ class Settings(BaseSettings):
     scraper_user_agent: str = "AgentStudio/1.0 (+https://github.com/agent-studio)"
     download_timeout_seconds: int = 60
 
+    # Organization knowledge base (turbovec)
+    kb_db_path: str = "kb_vectors.db"
+    kb_turbovec_index_dir: str = "kb_turbovec"
+    kb_turbovec_bit_width: int = 4
+    kb_embedding_model: str = "text-embedding-3-small"
+    kb_database_url: str = ""
+    kb_parent_max_chars: int = 1800
+    kb_child_max_chars: int = 280
+    kb_child_overlap: int = 40
+    kb_ask_child_candidates: int = 24
+    kb_ask_parent_top_k: int = 5
+
+    # Video embeddings (transcript + visual scene descriptions)
+    kb_whisper_model: str = "whisper-1"
+    kb_video_frame_interval_sec: float = 30.0
+    kb_video_max_frames: int = 20
+    kb_video_describe_frames: bool = True
+    kb_video_ffmpeg_timeout_seconds: int = 180
+    kb_video_whisper_timeout_seconds: int = 300
+
+    # SharePoint (Microsoft Graph) — stream PDFs without download
+    sharepoint_graph_base: str = "https://graph.microsoft.com/v1.0"
+    sharepoint_site_url: str = ""
+    sharepoint_access_token: str = ""
+
 
 settings = Settings()
 

@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 from app.agents.base import BaseAgent
+from app.agents.perception_registry import PERCEPTION_AGENTS
 from app.agents.understanding_registry import UNDERSTANDING_AGENTS
 from app.services.event_bus import event_bus
 from app.services.llm import LLMError, complete_json, llm_configured
@@ -69,6 +70,9 @@ AGENT_KEYWORDS: dict[str, list[str]] = {
 }
 
 for _uid, _meta in UNDERSTANDING_AGENTS.items():
+    AGENT_KEYWORDS[_uid] = list(_meta.get("keywords") or [])
+
+for _uid, _meta in PERCEPTION_AGENTS.items():
     AGENT_KEYWORDS[_uid] = list(_meta.get("keywords") or [])
 
 CALL_INTENT_PHRASES = [

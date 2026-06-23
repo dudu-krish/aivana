@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600&display=swap" rel="stylesheet" />
   <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,500,0,0&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css?v=35" />
+  <link rel="stylesheet" href="/static/style.css?v=37" />
 </head>
 <body>
   <!-- Auth -->
@@ -141,6 +141,12 @@
           </div>
           <button type="button" class="welcome-banner-close" id="welcome-banner-close" aria-label="Dismiss">×</button>
         </div>
+        <div id="moravec-banner" class="moravec-banner">
+          <div class="moravec-banner-inner">
+            <strong>Moravec's Paradox — built into Agent Studio</strong>
+            <span>AI handles repetitive reading, calculations, pattern analysis, and strategy. You bring common sense, social understanding, and physical coordination.</span>
+          </div>
+        </div>
         <div class="canvas-toolbar">
           <div class="canvas-tools">
             <button class="tool-btn" id="zoom-in" title="Zoom in">+</button>
@@ -201,6 +207,14 @@
             </div>
           </div>
         </section>
+        <section class="sidebar-kb-ask" aria-label="Knowledge base Q&amp;A">
+          <div class="kb-ask-header">
+            <h2>Ask Knowledge Base</h2>
+            <span class="kb-stats" id="kb-stats">—</span>
+          </div>
+          <p class="kb-ask-hint">Hierarchical RAG — precise child search, full parent context.</p>
+          <button type="button" class="btn btn-filled btn-block" id="btn-kb-ask">Ask</button>
+        </section>
       </aside>
     </div>
   </div>
@@ -249,6 +263,28 @@
       <div class="run-logs-meta" id="result-modal-meta"></div>
       <p class="run-logs-task" id="result-modal-message"></p>
       <pre class="result-json" id="result-modal-json"></pre>
+    </div>
+  </div>
+
+  <!-- Knowledge base Q&A modal -->
+  <div id="kb-ask-modal" class="agent-modal hidden" aria-hidden="true">
+    <div class="agent-modal-backdrop" id="kb-ask-backdrop"></div>
+    <div class="agent-modal-card kb-ask-modal-card">
+      <div class="props-header">
+        <h2>Ask Knowledge Base</h2>
+        <span class="kb-stats" id="kb-modal-stats">—</span>
+        <button class="icon-btn modal-close" type="button" id="kb-ask-close" aria-label="Close">×</button>
+      </div>
+      <p class="kb-ask-hint">Ask about policies, invoices, contracts, or methodology — AI finds precise matches and reads full parent context.</p>
+      <textarea id="kb-modal-question" rows="4" placeholder="What is our refund policy?"></textarea>
+      <div class="kb-modal-actions">
+        <button type="button" class="btn btn-tonal" id="kb-modal-clear">Clear</button>
+        <button type="button" class="btn btn-filled" id="kb-modal-submit">Ask</button>
+      </div>
+      <div class="kb-modal-answer hidden" id="kb-modal-answer">
+        <div class="kb-modal-loading hidden" id="kb-modal-loading">Searching child chunks, loading parent context…</div>
+        <div class="kb-modal-result hidden" id="kb-modal-result"></div>
+      </div>
     </div>
   </div>
 
@@ -302,9 +338,9 @@
     </div>
   </div>
 
-  <script src="/static/studio.js?v=31"></script>
+  <script src="/static/studio.js?v=36"></script>
   <script src="/static/onboarding.js?v=23"></script>
   <script src="/static/auth.js?v=22"></script>
-  <script src="/static/app.js?v=28"></script>
+  <script src="/static/app.js?v=33"></script>
 </body>
 </html>

@@ -162,6 +162,116 @@ const AgentApp = (() => {
     } catch {
       if (!currentUser) showAuth();
     }
+    bindKnowledgeAsk();
+  }
+
+  async function refreshKbStats() {
+    const el = document.getElementById("kb-stats");
+    const modalEl = document.getElementById("kb-modal-stats");
+    try {
+      const data = await api("/api/knowledge/status");
+      const label = data.parents
+        ? `${data.documents || 0} docs · ${data.parents} parents · ${data.children || data.chunks || 0} child chunks`
+        : `${data.documents || 0} docs · ${data.chunks || 0} chunks`;
+      if (el) el.textContent = label;
+      if (modalEl) modalEl.textContent = label;
+    } catch {
+      const fallback = "Not indexed yet";
+      if (el) el.textContent = fallback;
+      if (modalEl) modalEl.textContent = fallback;
+    }
+  }
+
+  function openKbAskModal() {
+    const modal = document.getElementById("kb-ask-modal");
+    if (!modal) return;
+    refreshKbStats();
+    modal.classList.remove("hidden");
+    modal.setAttribute("aria-hidden", "false");
+    document.getElementById("kb-modal-question")?.focus();
+  }
+
+  function closeKbAskModal() {
+    const modal = document.getElementById("kb-ask-modal");
+    if (!modal) return;
+    modal.classList.add("hidden");
+    modal.setAttribute("aria-hidden", "true");
+  }
+
+  async function submitKbQuestion() {
+    const input = document.getElementById("kb-modal-question");
+    const answerWrap = document.getElementById("kb-modal-answer");
+    const loading = document.getElementById("kb-modal-loading");
+    const result = document.getElementById("kb-modal-result");
+    const question = input?.value?.trim();
+    if (!question) return;
+
+    if (answerWrap) answerWrap.classList.remove("hidden");
+    if (loading) loading.classList.remove("hidden");
+    if (result) {
+      result.classList.add("hidden");
+      result.innerHTML = "";
+    }
+
+    try {
+      const data = await api("/api/knowledge/ask", "POST", {
+        question,
+        collection: "org-knowledge",
+        top_k: 5,
+      });
+      const sources = (data.sources || [])
+        .map(
+          (s) =>
+            `<li><strong>${escapeHtml(s.metadata?.filename || s.document_id || "Source")}</strong> — ${escapeHtml(s.preview || "")}</li>`
+        )
+        .join("");
+      const modeTag = data.retrieval === "hierarchical_parent_child"
+        ? '<span class="kb-mode-tag">Hierarchical RAG</span>'
+        : "";
+      if (result) {
+        result.innerHTML = `<strong>Answer</strong>${modeTag}<div class="kb-answer-body">${escapeHtml(data.answer || "")}</div>${
+          sources ? `<strong>Parent context sources</strong><ul class="kb-sources-list">${sources}</ul>` : ""
+        }`;
+        result.classList.remove("hidden");
+      }
+    } catch (e) {
+      if (result) {
+        result.innerHTML = `<p class="error-text">${escapeHtml(e.message)}</p>`;
+        result.classList.remove("hidden");
+      }
+    } finally {
+      if (loading) loading.classList.add("hidden");
+    }
+  }
+
+  function bindKnowledgeAsk() {
+    refreshKbStats();
+    document.getElementById("btn-kb-ask")?.addEventListener("click", openKbAskModal);
+    document.getElementById("kb-ask-close")?.addEventListener("click", closeKbAskModal);
+    document.getElementById("kb-ask-backdrop")?.addEventListener("click", closeKbAskModal);
+    document.getElementById("kb-modal-submit")?.addEventListener("click", submitKbQuestion);
+    document.getElementById("kb-modal-clear")?.addEventListener("click", () => {
+      const input = document.getElementById("kb-modal-question");
+      const answerWrap = document.getElementById("kb-modal-answer");
+      const result = document.getElementById("kb-modal-result");
+      if (input) input.value = "";
+      if (result) result.innerHTML = "";
+      if (answerWrap) answerWrap.classList.add("hidden");
+      input?.focus();
+    });
+    document.getElementById("kb-modal-question")?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        submitKbQuestion();
+      }
+    });
+  }
+
+  function escapeHtml(str) {
+    return String(str || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
   }
 
   function bindAuth() {
@@ -579,6 +689,56 @@ const AgentApp = (() => {
         },
         ...runPayload,
       });
+    } else if (agentId === "org-knowledge-base") {
+      let sources = config.sources || [];
+      let folderPath = (config.folder_path || "").trim();
+      const upstreamFolder = nodeId ? (await resolveUpstreamFolder(nodeId)).trim() : "";
+      if (upstreamFolder && (!folderPath || folderPath === "invoices")) {
+        folderPath = upstreamFolder;
+      } else if (!folderPath && !sources.length) {
+        folderPath = upstreamFolder || ".";
+      }
+      if (!sources.length || sources.every((s) => !String(s.folder || s.path || "").trim())) {
+        sources = [{ type: "folder_pdf", folder: folderPath || "." }];
+      } else if (folderPath) {
+        sources = sources.map((s) => {
+          if (String(s.type || "").toLowerCase().includes("folder") || s.type === "folder_pdf") {
+            const f = String(s.folder || s.path || "").trim();
+            return { ...s, type: "folder_pdf", folder: f || folderPath };
+          }
+          return s;
+        });
+      }
+      await api("/api/agents/org-knowledge-base/run", "POST", {
+        action: config.action || "build",
+        collection: config.collection || "org-knowledge",
+        folder_path: folderPath,
+        sources,
+        question: config.question || "",
+        top_k: 8,
+        ...runPayload,
+      });
+    } else if (agent?.category === "perception") {
+      let source = (config.folder_path || config.source || config.text || "").trim();
+      if (!source && nodeId) {
+        if (agentId === "read-pdf") {
+          source = (await resolveUpstreamFolder(nodeId)).trim();
+        }
+        if (!source) {
+          source = (await resolveUpstreamInputText(nodeId)).trim();
+        }
+      }
+      await api("/api/agents/perception/run", "POST", {
+        agent_id: agentId,
+        source,
+        folder_path: agentId === "read-pdf" ? source : (config.folder_path || ""),
+        agent_config: {
+          prompt: config.prompt,
+          model: config.model,
+          temperature: config.temperature,
+        },
+        ...runPayload,
+      });
     }
     return null;
   }
@@ -723,6 +883,25 @@ const AgentApp = (() => {
       }
     }
 
+    if (agent?.category === "perception") {
+      const inner = payload.result;
+      if (typeof inner === "string") return inner;
+      if (inner?.combined_content) return String(inner.combined_content);
+      if (inner?.content) return String(inner.content);
+      if (inner?.text) return String(inner.text);
+      if (inner?.transcript) return String(inner.transcript);
+      if (inner?.body) return typeof inner.body === "string" ? inner.body : JSON.stringify(inner.body, null, 2);
+      if (Array.isArray(inner?.documents)) {
+        return inner.documents
+          .filter((d) => d?.content)
+          .map((d) => `=== ${d.filename || "document"} ===\n${d.content}`)
+          .join("\n\n");
+      }
+      if (inner && typeof inner === "object") {
+        return JSON.stringify(inner, null, 2);
+      }
+    }
+
     if (payload.body_preview) return String(payload.body_preview);
     if (payload.text) return String(payload.text);
     if (payload.text_preview) return String(payload.text_preview);
@@ -749,6 +928,47 @@ const AgentApp = (() => {
     } catch (_) {
       return null;
     }
+  }
+
+  function extractFolderFromResult(agentId, row) {
+    if (!row) return "";
+    const payload = row.result || {};
+
+    if (agentId === "gmail-organizer") {
+      if (payload.output_dir) return String(payload.output_dir);
+      if ((payload.attachments_saved || 0) > 0) return "gmail_attachments";
+    }
+    if (agentId === "file-download") {
+      if (payload.output_dir) {
+        const dir = String(payload.output_dir);
+        if (dir.includes("downloads")) return "downloads";
+        return dir;
+      }
+      const results = payload.results || [];
+      if (results.length) return "downloads";
+    }
+    if (agentId === "read-pdf") {
+      if (payload.folder_relative) return String(payload.folder_relative);
+      if (payload.folder) return String(payload.folder);
+    }
+    if (agentId === "org-knowledge-base") {
+      if (payload.folder_relative) return String(payload.folder_relative);
+    }
+    if (payload.folder_relative) return String(payload.folder_relative);
+    if (payload.output_dir) return String(payload.output_dir);
+    return "";
+  }
+
+  async function resolveUpstreamFolder(nodeId) {
+    const upstreamIds = AgentStudio.getUpstreamNodeIds?.(nodeId) || [];
+    for (const upId of upstreamIds) {
+      const upNode = AgentStudio.getNodeById?.(upId);
+      if (!upNode?.agentId) continue;
+      const row = await fetchLatestAgentResult(upNode.agentId);
+      const folder = extractFolderFromResult(upNode.agentId, row);
+      if (folder.trim()) return folder.trim();
+    }
+    return "";
   }
 
   async function resolveUpstreamInputText(nodeId) {

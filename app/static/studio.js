@@ -135,8 +135,68 @@ const AgentStudio = (() => {
       inputs: ["urls"], outputs: ["saved_files"],
       tools: ["httpx"],
     },
+    "org-knowledge-base": {
+      id: "org-knowledge-base", name: "Organization Knowledge Base", icon: "school",
+      type: "Knowledge", category: "action", runnable: true,
+      description: "Build a searchable knowledge base from PDFs, videos, CSV, databases, and SharePoint — hierarchical RAG at scale.",
+      prompt: "Stream-read sources without downloading files; chunk, embed, and index with turbovec for fast Q&A.",
+      model: "gpt-4o-mini", temperature: 0.1,
+      inputs: ["sources", "folder_path"], outputs: ["knowledge_index"],
+      tools: ["turbovec", "embeddings"],
+    },
     ...buildUnderstandingAgentDefs(),
+    ...buildPerceptionAgentDefs(),
   };
+
+  function buildPerceptionAgentDefs() {
+    const specs = [
+      ["read-text", "Read Text", "article", "Read and normalize plain text input."],
+      ["read-pdf", "Read PDF", "picture_as_pdf", "Read all PDFs in a folder and extract text from each."],
+      ["read-word", "Read Word Document", "description", "Extract text from Word (.docx) files."],
+      ["read-excel", "Read Excel", "table_chart", "Read spreadsheet data from Excel."],
+      ["read-csv", "Read CSV", "table_rows", "Parse CSV into rows and columns."],
+      ["read-image", "Read Image", "image", "Inspect image files and metadata."],
+      ["ocr", "OCR", "document_scanner", "Optical character recognition on scans."],
+      ["read-barcode", "Read Barcode", "barcode_scanner", "Decode barcode values."],
+      ["read-qr-code", "Read QR Code", "qr_code_scanner", "Decode QR code payloads."],
+      ["read-audio", "Read Audio", "audio_file", "Inspect audio file metadata."],
+      ["speech-to-text", "Speech-to-Text", "record_voice_over", "Transcribe audio to text."],
+      ["video-frame-extractor", "Video Frame Extractor", "video_library", "Extract frames from video."],
+      ["face-detector", "Face Detector", "face", "Detect faces in visual input."],
+      ["object-detector", "Object Detector", "center_focus_strong", "Detect objects in images."],
+      ["handwriting-reader", "Handwriting Reader", "draw", "Read handwritten text."],
+      ["table-detector", "Table Detector", "table_view", "Detect tabular structures."],
+      ["form-reader", "Form Reader", "ballot", "Extract labeled form fields."],
+      ["screenshot-reader", "Screenshot Reader", "screenshot_monitor", "Read screenshot content."],
+      ["html-reader", "HTML Reader", "code", "Parse HTML and extract text."],
+      ["email-reader", "Email Reader", "mail", "Parse email headers and body."],
+      ["calendar-reader", "Calendar Reader", "calendar_month", "Parse calendar events."],
+      ["database-reader", "Database Reader", "database", "Parse database row output."],
+      ["api-reader", "API Reader", "api", "Fetch and parse JSON from an API URL."],
+      ["log-reader", "Log Reader", "receipt_long", "Parse log lines into entries."],
+      ["clipboard-reader", "Clipboard Reader", "content_paste", "Normalize pasted clipboard content."],
+    ];
+    return Object.fromEntries(
+      specs.map(([id, name, icon, description]) => [
+        id,
+        {
+          id,
+          name,
+          icon,
+          type: "Perception",
+          category: "perception",
+          runnable: true,
+          description,
+          prompt: `${name}: extract structured content from the configured input source.`,
+          model: "gpt-4o-mini",
+          temperature: 0.1,
+          inputs: id === "read-pdf" ? ["folder_path"] : ["source"],
+          outputs: ["content"],
+          tools: ["input"],
+        },
+      ])
+    );
+  }
 
   function buildUnderstandingAgentDefs() {
     const specs = [
@@ -187,6 +247,15 @@ const AgentStudio = (() => {
   function isUnderstandingAgent(agentId) {
     const agent = AGENT_DEFS[agentId];
     return agent?.category === "understanding";
+  }
+
+  function isPerceptionAgent(agentId) {
+    const agent = AGENT_DEFS[agentId];
+    return agent?.category === "perception";
+  }
+
+  function isMicroAgent(agentId) {
+    return isUnderstandingAgent(agentId) || isPerceptionAgent(agentId);
   }
 
   const EMPTY_WORKFLOW = { nodes: [], edges: [] };
@@ -696,6 +765,43 @@ const AgentStudio = (() => {
         reference_text: document.getElementById("understanding-reference")?.value?.trim() || "",
       };
     }
+    if (isPerceptionAgent(node.agentId)) {
+      if (node.agentId === "read-pdf") {
+        return {
+          ...base,
+          folder_path: document.getElementById("perception-folder")?.value?.trim() || "",
+          source: document.getElementById("perception-folder")?.value?.trim() || "",
+        };
+      }
+      return {
+        ...base,
+        source: document.getElementById("perception-source")?.value?.trim() || "",
+      };
+    }
+    if (node.agentId === "org-knowledge-base") {
+      const sources = [];
+      const folder = document.getElementById("kb-folder")?.value?.trim();
+      const includeVideos = document.getElementById("kb-include-videos")?.checked;
+      if (folder) sources.push({ type: "folder_pdf", folder, include_videos: !!includeVideos });
+      const videoFolder = document.getElementById("kb-video-folder")?.value?.trim();
+      if (videoFolder) sources.push({ type: "folder_video", folder: videoFolder });
+      const csv = document.getElementById("kb-csv")?.value?.trim();
+      if (csv) sources.push({ type: "csv", path: csv });
+      const dbUrl = document.getElementById("kb-db-url")?.value?.trim();
+      const dbQuery = document.getElementById("kb-db-query")?.value?.trim();
+      if (dbUrl && dbQuery) sources.push({ type: "database", connection_url: dbUrl, query: dbQuery });
+      const spSite = document.getElementById("kb-sp-site")?.value?.trim();
+      const spFolder = document.getElementById("kb-sp-folder")?.value?.trim();
+      if (spSite && spFolder) sources.push({ type: "sharepoint", site_url: spSite, folder_path: spFolder });
+      return {
+        ...base,
+        action: document.getElementById("kb-action")?.value || "build",
+        collection: document.getElementById("kb-collection")?.value?.trim() || "org-knowledge",
+        folder_path: folder || "",
+        sources,
+        question: document.getElementById("kb-question")?.value?.trim() || "",
+      };
+    }
     return { ...(node.config || {}), ...base };
   }
 
@@ -1109,6 +1215,7 @@ const AgentStudio = (() => {
 
     const groups = [
       { key: "action", label: "Agents" },
+      { key: "perception", label: "Perception" },
       { key: "understanding", label: "Understanding" },
     ];
 
@@ -1473,6 +1580,49 @@ const AgentStudio = (() => {
           <p class="prop-hint">Files saved to your downloads folder.</p>
         </div>`;
     }
+    if (agent.id === "org-knowledge-base") {
+      const upstreamHint = hasUpstreamNodes(node.id)
+        ? `<p class="prop-hint">Leave folder blank to use upstream PDF folder output.</p>`
+        : "";
+      extra = `
+        <div class="prop-group prop-actions">
+          <div class="moravec-inline">
+            <strong>Moravec's Paradox</strong>
+            <p>AI: repetitive reading, indexing, pattern search. You: judgment, relationships, decisions.</p>
+          </div>
+          <label>Action</label>
+          <select id="kb-action">
+            <option value="build"${(cfg.action || "build") === "build" ? " selected" : ""}>Build knowledge base</option>
+            <option value="ask"${cfg.action === "ask" ? " selected" : ""}>Ask question</option>
+          </select>
+          <label>Collection name</label>
+          <input type="text" id="kb-collection" value="${escapeHtml(cfg.collection || "org-knowledge")}" />
+          <label>PDF folder</label>
+          <input type="text" id="kb-folder" placeholder="Leave blank for upstream / all folders (.)" value="${escapeHtml(cfg.folder_path || "")}" />
+          <label class="checkbox-row">
+            <input type="checkbox" id="kb-include-videos"${cfg.include_videos ? " checked" : ""} />
+            Also embed videos in PDF folder (transcript + visual scenes)
+          </label>
+          ${upstreamHint}
+          <p class="prop-hint">PDFs and videos searched recursively. Use downloads, gmail_attachments, or . for entire workspace.</p>
+          <label>Video folder (optional)</label>
+          <input type="text" id="kb-video-folder" placeholder="downloads/videos" value="${escapeHtml(cfg.video_folder || "")}" />
+          <p class="prop-hint">Requires ffmpeg + OPENAI_API_KEY (Whisper transcript + frame descriptions → embeddings).</p>
+          <label>CSV path (optional)</label>
+          <input type="text" id="kb-csv" placeholder="downloads/data.csv" value="" />
+          <label>Database URL (optional)</label>
+          <input type="text" id="kb-db-url" placeholder="postgresql://…" value="" />
+          <label>SQL query (optional)</label>
+          <textarea id="kb-db-query" rows="2" placeholder="SELECT id, body FROM documents"></textarea>
+          <label>SharePoint site (optional)</label>
+          <input type="text" id="kb-sp-site" placeholder="contoso.sharepoint.com:/sites/docs" value="" />
+          <label>SharePoint folder (optional)</label>
+          <input type="text" id="kb-sp-folder" placeholder="Shared Documents/Policies" value="" />
+          <label>Question (ask mode)</label>
+          <textarea id="kb-question" rows="3" placeholder="What is our refund policy?">${escapeHtml(cfg.question || "")}</textarea>
+          <p class="prop-hint">Streams sources without downloading files. Indexed with turbovec for fast search at scale.</p>
+        </div>`;
+    }
     if (isUnderstandingAgent(agent.id)) {
       const refBlock = agent.needsReference
         ? `
@@ -1490,6 +1640,28 @@ const AgentStudio = (() => {
           ${upstreamHint}
           <p class="prop-hint">Uses OpenAI when configured; otherwise rule-based analysis.</p>
         </div>`;
+    }
+    if (isPerceptionAgent(agent.id)) {
+      const upstreamHint = hasUpstreamNodes(node.id)
+        ? `<p class="prop-hint">Leave blank to use the output folder from connected upstream agent(s).</p>`
+        : "";
+      if (agent.id === "read-pdf") {
+        extra = `
+        <div class="prop-group prop-actions">
+          <label>PDF Folder</label>
+          <input type="text" id="perception-folder" placeholder="gmail_attachments, downloads, invoices…" value="${escapeHtml(cfg.folder_path || cfg.source || "")}" />
+          ${upstreamHint}
+          <p class="prop-hint">Reads every .pdf in the folder (including subfolders). Use paths relative to your workspace.</p>
+        </div>`;
+      } else {
+        extra = `
+        <div class="prop-group prop-actions">
+          <label>Input Source</label>
+          <textarea id="perception-source" rows="6" placeholder="Text, URL, file path (downloads/invoices), HTML, logs…">${escapeHtml(cfg.source || cfg.text || "")}</textarea>
+          ${upstreamHint}
+          <p class="prop-hint">Uses OpenAI when configured; otherwise rule-based reading.</p>
+        </div>`;
+      }
     }
     if (node.id === "n-input") {
       const taskVal = $("#workflow-task")?.value || "";
@@ -2009,6 +2181,30 @@ const AgentStudio = (() => {
   }
 
   const WORKFLOW_TEMPLATES = [
+    {
+      id: "org-knowledge-base",
+      name: "Organization Knowledge Base",
+      stars: 5,
+      task: "Build organizational knowledge from PDF folders, CSV, databases, and SharePoint — then ask questions with full transparency",
+      diagram: `Moravec's Paradox
+AI → read millions of docs, pattern index, retrieval
+You → judgment, relationships, final decisions
+
+Sources (stream, no download)
+├── PDF folder / SharePoint
+├── CSV / Excel rows
+└── Database query
+
+        ▼
+Organization Knowledge Base (turbovec)
+        ▼
+Ask your knowledge base`,
+      nodes: [
+        { id: "n-pdf", agentId: "read-pdf", x: 40, y: 120, status: "idle", config: { folder_path: "invoices" } },
+        { id: "n-kb", agentId: "org-knowledge-base", x: 320, y: 120, status: "idle", config: { folder_path: "", action: "build" } },
+      ],
+      edges: [{ from: "n-pdf", to: "n-kb" }],
+    },
     {
       id: "sales-lead-qualification",
       name: "Sales Lead Qualification",

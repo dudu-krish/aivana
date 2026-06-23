@@ -430,6 +430,8 @@ class GmailOrganizerAgent(BaseAgent):
                 for k, v in sorted(attachment_counts.items(), key=lambda x: -x[1])
             ],
             "email_summaries": email_summaries,
+            "output_dir": "gmail_attachments",
+            "attachments_folder": str(output_dir),
         }
 
         summary = {

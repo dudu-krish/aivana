@@ -27,6 +27,9 @@ from app.agents.invoice_matcher import InvoiceMatcherAgent
 from app.agents.mailer import MailerAgent
 from app.agents.planner import PlannerAgent
 from app.agents.telecaller import TelecallerAgent
+from app.agents.knowledge_base import OrganizationKnowledgeBaseAgent
+from app.agents.perception import PerceptionAgent
+from app.agents.perception_registry import PERCEPTION_AGENTS, is_perception_agent
 from app.agents.understanding import UnderstandingAgent
 from app.agents.understanding_registry import UNDERSTANDING_AGENTS, is_understanding_agent
 from app.agents.whatsapp import WhatsAppAgent
@@ -40,6 +43,7 @@ from app.services.gmail_auth import (
     get_connected_gmail_email,
     is_gmail_connected,
 )
+from app.services.knowledge_base.service import KnowledgeBaseService
 from app.services.result_queue import clear_user_queue, get_result, latest_for_agent, list_results
 from app.services.run_context import current_run_id
 from app.services.tenant import TenantContext
@@ -122,6 +126,35 @@ class UnderstandingRequest(AgentRunContext):
     text: str = ""
     reference_text: str = ""
     agent_config: dict[str, Any] | None = None
+
+
+class PerceptionRequest(AgentRunContext):
+    agent_id: str
+    source: str = ""
+    folder_path: str = ""
+    text: str = ""
+    agent_config: dict[str, Any] | None = None
+
+
+class KnowledgeBuildRequest(AgentRunContext):
+    collection: str = "org-knowledge"
+    folder_path: str = ""
+    sources: list[dict[str, Any]] = []
+
+
+class KnowledgeAskRequest(AgentRunContext):
+    collection: str = "org-knowledge"
+    question: str = ""
+    top_k: int = 8
+
+
+class KnowledgeBaseRunRequest(AgentRunContext):
+    action: str = "build"
+    collection: str = "org-knowledge"
+    folder_path: str = ""
+    sources: list[dict[str, Any]] = []
+    question: str = ""
+    top_k: int = 8
 
 
 def _run_key(user_id: str, agent_id: str) -> str:
@@ -711,6 +744,126 @@ async def run_understanding_agent(
     )
 
 
+@router.post("/agents/perception/run", response_model=RunResponse)
+async def run_perception_agent(
+    background_tasks: BackgroundTasks,
+    body: PerceptionRequest,
+    tenant: Annotated[TenantContext, Depends(get_tenant)],
+) -> RunResponse:
+    agent_id = body.agent_id.strip()
+    if not is_perception_agent(agent_id):
+        raise HTTPException(status_code=404, detail=f"Unknown perception agent: {agent_id}")
+
+    key = _run_key(tenant.user_id, agent_id)
+    if _running.get(key):
+        raise HTTPException(status_code=409, detail=f"{PERCEPTION_AGENTS[agent_id]['name']} is already running")
+
+    source = (body.folder_path or body.source or body.text or "").strip()
+    agent = PerceptionAgent(tenant, agent_id)
+    background_tasks.add_task(
+        _run_agent,
+        key,
+        agent.run(source=source, agent_config=body.agent_config),
+        body.run_id,
+    )
+    return RunResponse(
+        agent_id=agent_id,
+        status="started",
+        message=f"Running {PERCEPTION_AGENTS[agent_id]['name']}",
+    )
+
+
+def _normalize_kb_sources(sources: list[dict], folder_path: str) -> list[dict]:
+    folder = folder_path.strip()
+    if not sources:
+        return [{"type": "folder_pdf", "folder": folder or "."}]
+    normalized: list[dict] = []
+    for spec in sources:
+        src_type = str(spec.get("type") or "").lower()
+        if src_type in ("folder_pdf", "pdf_folder", "folder"):
+            spec_folder = str(spec.get("folder") or spec.get("path") or folder or ".").strip() or "."
+            normalized.append({**spec, "type": "folder_pdf", "folder": spec_folder})
+        else:
+            normalized.append(spec)
+    return normalized
+
+
+@router.post("/knowledge/build", response_model=RunResponse)
+async def build_knowledge_base(
+    background_tasks: BackgroundTasks,
+    body: KnowledgeBuildRequest,
+    tenant: Annotated[TenantContext, Depends(get_tenant)],
+) -> RunResponse:
+    key = _run_key(tenant.user_id, "org-knowledge-base")
+    if _running.get(key):
+        raise HTTPException(status_code=409, detail="Knowledge base build already running")
+
+    agent = OrganizationKnowledgeBaseAgent(tenant)
+    sources = _normalize_kb_sources(body.sources, body.folder_path)
+
+    background_tasks.add_task(
+        _run_agent,
+        key,
+        agent.run(action="build", collection=body.collection, sources=sources, folder_path=body.folder_path),
+        body.run_id,
+    )
+    return RunResponse(agent_id="org-knowledge-base", status="started", message="Building organization knowledge base")
+
+
+@router.post("/knowledge/ask")
+async def ask_knowledge_base(
+    body: KnowledgeAskRequest,
+    tenant: Annotated[TenantContext, Depends(get_tenant)],
+) -> dict:
+    if not body.question.strip():
+        raise HTTPException(status_code=400, detail="Question is required")
+    kb = KnowledgeBaseService(tenant)
+    return await kb.ask(body.question.strip(), collection=body.collection, top_k=body.top_k)
+
+
+@router.get("/knowledge/status")
+async def knowledge_base_status(
+    tenant: Annotated[TenantContext, Depends(get_tenant)],
+    collection: str = "org-knowledge",
+) -> dict:
+    kb = KnowledgeBaseService(tenant)
+    return kb.stats(collection)
+
+
+@router.post("/agents/org-knowledge-base/run", response_model=RunResponse)
+async def run_org_knowledge_base(
+    background_tasks: BackgroundTasks,
+    body: KnowledgeBaseRunRequest,
+    tenant: Annotated[TenantContext, Depends(get_tenant)],
+) -> RunResponse:
+    key = _run_key(tenant.user_id, "org-knowledge-base")
+    if _running.get(key):
+        raise HTTPException(status_code=409, detail="Organization Knowledge Base is already running")
+
+    agent = OrganizationKnowledgeBaseAgent(tenant)
+    action = (body.action or "build").strip().lower()
+    if action == "ask":
+        result = await agent.run(
+            action="ask",
+            question=body.question,
+            collection=body.collection,
+            top_k=body.top_k,
+        )
+        if result.get("status") == "error":
+            raise HTTPException(status_code=400, detail=result.get("message", "Ask failed"))
+        return RunResponse(agent_id="org-knowledge-base", status="completed", message=result.get("answer", "")[:200])
+
+    sources = _normalize_kb_sources(body.sources, body.folder_path)
+
+    background_tasks.add_task(
+        _run_agent,
+        key,
+        agent.run(action="build", collection=body.collection, sources=sources, folder_path=body.folder_path),
+        body.run_id,
+    )
+    return RunResponse(agent_id="org-knowledge-base", status="started", message="Building organization knowledge base")
+
+
 @router.get("/queue")
 async def list_result_queue(
     user: Annotated[dict, Depends(get_current_user)],
@@ -763,7 +916,10 @@ async def agents_status(user: Annotated[dict, Depends(get_current_user)]) -> dic
         "whatsapp": _running.get(_run_key(uid, "whatsapp"), False),
         "data-scraper": _running.get(_run_key(uid, "data-scraper"), False),
         "file-download": _running.get(_run_key(uid, "file-download"), False),
+        "org-knowledge-base": _running.get(_run_key(uid, "org-knowledge-base"), False),
     }
     for agent_id in UNDERSTANDING_AGENTS:
+        status[agent_id] = _running.get(_run_key(uid, agent_id), False)
+    for agent_id in PERCEPTION_AGENTS:
         status[agent_id] = _running.get(_run_key(uid, agent_id), False)
     return status
