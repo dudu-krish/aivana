@@ -114,6 +114,21 @@ def test_build_veo_prompt_accepts_string_hooks(base_state: dict) -> None:
     prompt = _build_veo_prompt(state, {"intro_style": "Cinematic documentary"})
     assert "Assamese" in prompt or "Excel" in prompt or "Claude" in prompt
 
+
+def test_build_veo_prompt_accepts_hooks_as_single_string(base_state: dict) -> None:
+    """LLM may return hooks as one string instead of a list — old code crashed on hooks[0]['text']."""
+    state = {
+        **base_state,
+        "goal": "Assamese Excel tutorial",
+        "pipeline_results": {
+            "content-hook-generator": {"hooks": "Learn Excel with Claude in Assamese"},
+            "content-script-writer": {"scripts": "Step by step Excel analysis"},
+            "content-visual-planner": {"shot_list": "Screen recording"},
+        },
+    }
+    prompt = _build_veo_prompt(state, {})
+    assert "Excel" in prompt or "Assamese" in prompt
+
 def test_content_director_rule_pipeline() -> None:
     tenant = TenantContext(user_id="test-user", email="test@example.com", name="Test")
     director = ContentDirectorAgent(tenant)

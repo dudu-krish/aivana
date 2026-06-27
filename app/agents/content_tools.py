@@ -177,10 +177,28 @@ def _item_text(item: Any, *keys: str) -> str:
     return str(item).strip() if item else ""
 
 
+def _coerce_text_list(items: Any) -> list[Any]:
+    """Normalize LLM/rule outputs that may be a list, a string, or a nested dict."""
+    if items is None:
+        return []
+    if isinstance(items, str):
+        return [items] if items.strip() else []
+    if isinstance(items, dict):
+        for key in ("hooks", "scripts", "shot_list", "items", "result", "text", "body"):
+            inner = items.get(key)
+            if inner is not None:
+                return _coerce_text_list(inner)
+        return [items]
+    if isinstance(items, list):
+        return items
+    return [items]
+
+
 def _first_item_text(items: Any, *keys: str, default: str = "") -> str:
-    if not isinstance(items, list) or not items:
+    coerced = _coerce_text_list(items)
+    if not coerced:
         return default
-    text = _item_text(items[0], *keys)
+    text = _item_text(coerced[0], *keys)
     return text or default
 
 def rule_trend_research(state: dict[str, Any]) -> dict[str, Any]:
@@ -393,15 +411,14 @@ async def rule_video_creator(state: dict[str, Any]) -> dict[str, Any]:
 def _build_veo_prompt(state: dict[str, Any], human: dict[str, Any]) -> str:
     from app.services.veo_video import build_intro_veo_prompt
 
-    hooks = _prior(state, "content-hook-generator").get("hooks") or []
-    scripts = _prior(state, "content-script-writer").get("scripts") or []
-    visuals = _prior(state, "content-visual-planner").get("shot_list") or []
+    hooks = _coerce_text_list(_prior(state, "content-hook-generator").get("hooks"))
+    scripts = _coerce_text_list(_prior(state, "content-script-writer").get("scripts"))
+    visuals = _coerce_text_list(_prior(state, "content-visual-planner").get("shot_list"))
     hook = _first_item_text(hooks, "text", "hook", "title")
     script_excerpt = _first_item_text(scripts, "body", "script", "text")[:400]
     visual_notes = "; ".join(
         _item_text(s, "notes", "description", "text")
-        for s in visuals[:3]
-        if isinstance(s, (dict, str))
+        for s in _coerce_text_list(visuals)[:3]
     )
     prompt = build_intro_veo_prompt(
         niche=_niche_label(state),
