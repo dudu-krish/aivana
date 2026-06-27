@@ -40,11 +40,41 @@ const AgentApp = (() => {
 
   /** True while an agent is blocked on human input — prevents premature run completion */
   let hitlPauseActive = false;
+  let pendingHitlRequest = null;
+
+  function isHitlBlocking() {
+    return hitlPauseActive || !!pendingHitlRequest || !!window.__pendingHitlPayload;
+  }
 
   function maybeFinishStandaloneRun(status = "completed") {
-    if (!standaloneRunActive || workflowRunning || hitlPauseActive || pendingHitlRequest) return;
+    if (!standaloneRunActive || workflowRunning || isHitlBlocking()) return;
     AgentStudio.finishWorkflowRun(status);
     standaloneRunActive = false;
+  }
+
+  async function waitForHitlClear(timeoutMs = 3600000) {
+    const start = Date.now();
+    while (isHitlBlocking() || (await fetchPendingHitlList()).length) {
+      const pending = await fetchPendingHitlList();
+      if (pending.length) {
+        hitlPauseActive = true;
+        const latest = normalizeHitlPayload(pending[pending.length - 1]);
+        if (latest) {
+          const overlay = document.getElementById("hitl-overlay");
+          const panelOpen = overlay && !overlay.classList.contains("hidden");
+          if (!panelOpen) {
+            window.__pendingHitlPayload = latest;
+            document.getElementById("hitl-resume-bar")?.classList.remove("hidden");
+          }
+          if (!panelOpen || pendingHitlRequest?.request_id !== latest.request_id) {
+            showHitlPanel(latest);
+          }
+        }
+      }
+      if (Date.now() - start > timeoutMs) break;
+      await delay(800);
+    }
+    hitlPauseActive = false;
   }
 
   async function fetchPendingHitlList() {
@@ -459,8 +489,6 @@ const AgentApp = (() => {
     }
   }
 
-  let pendingHitlRequest = null;
-
   async function pollPendingHitl() {
     try {
       const pending = await fetchPendingHitlList();
@@ -615,16 +643,17 @@ const AgentApp = (() => {
       const el = form?.querySelector(`[name="${q.id}"]`);
       if (el) answers[q.id] = el.value;
     });
+    const req = pendingHitlRequest;
     try {
       await api("/api/agents/human-input/respond", "POST", {
-        request_id: pendingHitlRequest.request_id,
+        request_id: req.request_id,
         answers,
       });
-      const phase = pendingHitlRequest.phase;
+      const phase = req.phase;
       hideHitlPanel();
       AgentStudio.logRunEntry({
-        agent: pendingHitlRequest.agent_name || "Agent",
-        agentId: pendingHitlRequest.agent_id || "",
+        agent: req.agent_name || "Agent",
+        agentId: req.agent_id || "",
         type: "progress",
         message: phase === "review"
           ? "Approved — continuing workflow…"
@@ -662,7 +691,15 @@ const AgentApp = (() => {
     });
 
     if (type === "completed" || type === "error") {
-      AgentStudio.refreshResultsQueue?.();
+      try {
+        AgentStudio.refreshResultsQueue?.();
+      } catch (err) {
+        AgentStudio.logRunEntry?.({
+          agent: "System",
+          type: "error",
+          message: err?.message || "Could not refresh results queue",
+        });
+      }
       if (resultId) {
         AgentStudio.switchSidebarTab?.("queue");
       }
@@ -712,10 +749,13 @@ const AgentApp = (() => {
     }
 
     if (type === "awaiting_input") {
-      const hitlPayload = normalizeHitlPayload(event.data);
+      const hitlPayload = normalizeHitlPayload(event.data)
+        || normalizeHitlPayload(event.data?.hitl);
       if (hitlPayload) {
         showHitlPanel(hitlPayload);
         setAgentVisualStatus(agentId || hitlPayload.agent_id, "running");
+      } else {
+        pollPendingHitl();
       }
     }
 
@@ -1421,6 +1461,7 @@ const AgentApp = (() => {
           message: "Workflow stopped — click Resume to continue",
         });
       } else {
+        await waitForHitlClear();
         agentNodes.forEach((n) => AgentStudio.highlightNodeById(n.id, "done", "1.0"));
         AgentStudio.logRunEntry({
           agent: "LangGraph",
@@ -1565,6 +1606,7 @@ const AgentApp = (() => {
         message: "Workflow stopped — click Resume to continue",
       });
     } else {
+      await waitForHitlClear();
       AgentStudio.finishWorkflowRun(failed ? "failed" : "completed");
     }
     endWorkflowRunControls();
@@ -1811,6 +1853,7 @@ const AgentApp = (() => {
     init,
     bindPropertyActions,
     pollPendingHitl,
+    isHitlBlocking,
     openHitlFromBar,
     runAgent,
     runWorkflow,

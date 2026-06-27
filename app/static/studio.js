@@ -1246,6 +1246,7 @@ const AgentStudio = (() => {
 
   function finishWorkflowRun(status = "completed") {
     if (!currentRunId) return;
+    if (window.AgentApp?.isHitlBlocking?.()) return;
     const run = workflowRuns.find((r) => r.id === currentRunId);
     if (run) {
       run.status = status;
@@ -1434,22 +1435,23 @@ const AgentStudio = (() => {
     const countEl = $("#queue-count");
     if (!list) return;
 
+    const items = resultsQueue.filter(Boolean);
     if (countEl) {
-      countEl.textContent = `${resultsQueue.length} result${resultsQueue.length === 1 ? "" : "s"}`;
+      countEl.textContent = `${items.length} result${items.length === 1 ? "" : "s"}`;
     }
 
-    if (!resultsQueue.length) {
+    if (!items.length) {
       list.innerHTML = '<p class="runs-empty">No agent results yet. Run an agent to populate the queue.</p>';
       return;
     }
 
-    list.innerHTML = resultsQueue.map((item) => `
-      <article class="queue-card ${item.status}${activeResultId === item.id ? " active" : ""}" data-result-id="${item.id}">
+    list.innerHTML = items.map((item) => `
+      <article class="queue-card ${item.status || "completed"}${activeResultId === item.id ? " active" : ""}" data-result-id="${item.id || ""}">
         <div class="queue-card-head">
-          <span class="run-status-badge ${item.status}">${item.status}</span>
+          <span class="run-status-badge ${item.status || "completed"}">${item.status || "completed"}</span>
           <time>${formatRunTime(item.created_at)}</time>
         </div>
-        <div class="queue-agent">${escapeHtml(item.agent_name || item.agent_id)}</div>
+        <div class="queue-agent">${escapeHtml(item.agent_name || item.agent_id || "Agent")}</div>
         <div class="queue-message">${escapeHtml(item.message || "")}</div>
       </article>
     `).join("");
@@ -1473,6 +1475,7 @@ const AgentStudio = (() => {
         return;
       }
     }
+    if (!item) return;
 
     const modal = $("#result-modal");
     const titleEl = $("#result-modal-title");
