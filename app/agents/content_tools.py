@@ -160,6 +160,29 @@ def _human_answers(state: dict[str, Any], agent_id: str) -> dict[str, Any]:
     return dict(state.get("human_answers", {}).get(agent_id, {}))
 
 
+def _item_text(item: Any, *keys: str) -> str:
+    """Extract display text from rule/LLM output items (dict or plain string)."""
+    if item is None:
+        return ""
+    if isinstance(item, str):
+        return item.strip()
+    if isinstance(item, dict):
+        for key in keys:
+            val = item.get(key)
+            if val is not None and str(val).strip():
+                return str(val).strip()
+        for val in item.values():
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+    return str(item).strip() if item else ""
+
+
+def _first_item_text(items: Any, *keys: str, default: str = "") -> str:
+    if not isinstance(items, list) or not items:
+        return default
+    text = _item_text(items[0], *keys)
+    return text or default
+
 def rule_trend_research(state: dict[str, Any]) -> dict[str, Any]:
     niche = _niche_label(state)
     region = _region_label(state)
@@ -249,7 +272,10 @@ def rule_hook_generator(state: dict[str, Any]) -> dict[str, Any]:
 
 def rule_script_writer(state: dict[str, Any]) -> dict[str, Any]:
     hooks = _prior(state, "content-hook-generator").get("hooks") or []
-    opener = hooks[0]["text"] if hooks else f"Growing your audience in {_region_label(state)} starts here."
+    opener = _first_item_text(
+        hooks, "text", "hook", "title",
+        default=f"Growing your audience in {_region_label(state)} starts here.",
+    )
     topic = _prior(state, "content-strategy").get("primary_topic") or _goal(state)
     human = _human_answers(state, "content-script-writer")
     cta = human.get("cta") or "Subscribe and comment your city — I'll shout you out!"
@@ -370,9 +396,13 @@ def _build_veo_prompt(state: dict[str, Any], human: dict[str, Any]) -> str:
     hooks = _prior(state, "content-hook-generator").get("hooks") or []
     scripts = _prior(state, "content-script-writer").get("scripts") or []
     visuals = _prior(state, "content-visual-planner").get("shot_list") or []
-    hook = hooks[0]["text"] if hooks else ""
-    script_excerpt = scripts[0].get("body", "")[:400] if scripts else ""
-    visual_notes = "; ".join(s.get("notes", "") for s in visuals[:3])
+    hook = _first_item_text(hooks, "text", "hook", "title")
+    script_excerpt = _first_item_text(scripts, "body", "script", "text")[:400]
+    visual_notes = "; ".join(
+        _item_text(s, "notes", "description", "text")
+        for s in visuals[:3]
+        if isinstance(s, (dict, str))
+    )
     prompt = build_intro_veo_prompt(
         niche=_niche_label(state),
         goal=_goal(state),
@@ -406,7 +436,11 @@ def rule_video_editing(state: dict[str, Any]) -> dict[str, Any]:
             "cuts": ["Remove silence > 0.4s", "Jump cuts every 3–5s on talking head"],
             "captions": "Bold keyword highlights — Assamese + English if mixed",
             "effects": ["Punch-in zoom on hook", "Ken Burns on B-roll"],
-            "b_roll_suggestions": [s.get("notes", "") for s in shots if s.get("type") == "b_roll"],
+            "b_roll_suggestions": [
+                _item_text(s, "notes", "description", "text")
+                for s in shots
+                if isinstance(s, (dict, str)) and (not isinstance(s, dict) or s.get("type") == "b_roll")
+            ],
             "intro_clip": intro.get("intro_video") or intro.get("veo_prompt"),
             "tools": ["CapCut", "Descript", "Premiere"],
         }
@@ -475,7 +509,7 @@ def rule_learning(state: dict[str, Any]) -> dict[str, Any]:
             {"insight": f"Regional pride hooks outperformed generic titles for {_region_label(state)}", "confidence": 0.85},
             {"insight": "Shorts drove 70% of new subscribers", "confidence": 0.78},
         ],
-        "best_hook": hooks[0]["text"] if hooks else None,
+        "best_hook": _first_item_text(hooks, "text", "hook", "title") or None,
         "knowledge_base_updates": [
             f"Creator goal: {_goal(state)}",
             f"Primary audience: {_region_label(state)}",
@@ -740,7 +774,7 @@ def build_weekly_plan(state: dict[str, Any]) -> list[dict[str, Any]]:
             "day": day.get("day", f"Day {i + 1}"),
             "focus": day.get("focus"),
             "platforms": day.get("platforms", []),
-            "hook": hooks[i % len(hooks)]["text"] if hooks else None,
+            "hook": _item_text(hooks[i % len(hooks)], "text", "hook", "title") if hooks else None,
             "publish_slot": schedule[i]["slot"] if i < len(schedule) else None,
         })
     return plan

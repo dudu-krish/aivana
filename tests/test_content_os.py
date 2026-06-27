@@ -7,6 +7,7 @@ import pytest
 from app.agents.content_os import ContentDirectorAgent
 from app.agents.content_registry import CONTENT_AGENTS, CONTENT_PIPELINE, is_content_agent
 from app.agents.content_tools import (
+    _build_veo_prompt,
     build_weekly_plan,
     rule_trend_research,
     run_content_agent,
@@ -91,6 +92,27 @@ def test_build_weekly_plan(base_state: dict) -> None:
     plan = build_weekly_plan({**base_state, "pipeline_results": pipeline})
     assert plan[0]["hook"] == "Hook one"
 
+
+def test_build_veo_prompt_accepts_string_hooks(base_state: dict) -> None:
+    """LLM hook output may be plain strings — must not crash Video Creator."""
+    state = {
+        **base_state,
+        "goal": "Assamese Excel tutorial with Claude",
+        "niche": "Assam education",
+        "pipeline_results": {
+            "content-hook-generator": {
+                "hooks": ["Learn Excel with Claude in Assamese"],
+            },
+            "content-script-writer": {
+                "scripts": ["Open Excel, ask Claude to analyze your sheet…"],
+            },
+            "content-visual-planner": {
+                "shot_list": ["Screen recording of Excel with Assamese captions"],
+            },
+        },
+    }
+    prompt = _build_veo_prompt(state, {"intro_style": "Cinematic documentary"})
+    assert "Assamese" in prompt or "Excel" in prompt or "Claude" in prompt
 
 def test_content_director_rule_pipeline() -> None:
     tenant = TenantContext(user_id="test-user", email="test@example.com", name="Test")
