@@ -11,11 +11,44 @@ const AgentApp = (() => {
   let runTimings = {};
   let completedRuns = 0;
   let failedRuns = 0;
+  /** Maps agentId → canvas nodeId for the agent currently executing */
+  const activeNodeRuns = {};
+  let workflowRunning = false;
+  let workflowStopRequested = false;
+  let workflowAbortController = null;
+  /** True when a single-agent run created the active Runs panel entry */
+  let standaloneRunActive = false;
+
+  function ensureAgentRunRecord(agentId, config = {}) {
+    const existing = AgentStudio.getCurrentRunId?.();
+    if (existing) return existing;
+    const agent = AgentStudio.getAgent(agentId);
+    const goal = String(config.goal || config.task || config.question || "").trim();
+    const task = goal
+      ? `${agent?.name || agentId}: ${goal.slice(0, 100)}`
+      : `${agent?.name || agentId} run`;
+    standaloneRunActive = true;
+    AgentStudio.switchSidebarTab?.("runs");
+    const id = AgentStudio.startWorkflowRun(task);
+    AgentStudio.logRunEntry({
+      agent: "System",
+      type: "started",
+      message: `Running ${agent?.name || agentId}`,
+    });
+    return id;
+  }
+
+  function maybeFinishStandaloneRun(status = "completed") {
+    if (!standaloneRunActive || workflowRunning) return;
+    AgentStudio.finishWorkflowRun(status);
+    standaloneRunActive = false;
+  }
 
   const $ = (sel) => document.querySelector(sel);
 
-  async function api(path, method = "GET", body = null) {
+  async function api(path, method = "GET", body = null, signal = null) {
     const opts = { method, credentials: "include" };
+    if (signal) opts.signal = signal;
     if (body) {
       opts.headers = { "Content-Type": "application/json" };
       opts.body = JSON.stringify(body);
@@ -67,6 +100,7 @@ const AgentApp = (() => {
       AgentStudio.renderLibrary();
     }
     refreshGmailStatus();
+    bindYouTubeActions();
   }
 
   async function afterStudioReady(user, preferences, options = {}) {
@@ -87,6 +121,7 @@ const AgentApp = (() => {
       }
     }
     await connectWs();
+    await pollPendingHitl();
   }
 
   async function loadUserContext() {
@@ -116,9 +151,11 @@ const AgentApp = (() => {
       try {
         const me = await loadUserContext();
         updateGmailUI(me.gmail);
+        updateYouTubeUI(me.youtube);
         afterStudioReady(user, me.preferences || preferences, options);
       } catch {
         updateGmailUI({ connected: false, email: null });
+        updateYouTubeUI({ connected: false, channel: null });
         afterStudioReady(user, preferences, options);
       }
     });
@@ -143,6 +180,7 @@ const AgentApp = (() => {
         const me = await loadUserContext();
         showStudio(me.user, me.preferences);
         updateGmailUI(me.gmail);
+        updateYouTubeUI(me.youtube);
         afterStudioReady(me.user, me.preferences);
         if (new URLSearchParams(location.search).get("gmail") === "connected") {
           if (window.AgentStudio) {
@@ -152,6 +190,18 @@ const AgentApp = (() => {
               agent: "Gmail Organizer", type: "started",
               message: `Gmail connected${me.gmail.email ? `: ${me.gmail.email}` : ""} — scanning today's emails…`,
               time: new Date(),
+            });
+          }
+          history.replaceState({}, "", location.pathname);
+        }
+        if (new URLSearchParams(location.search).get("youtube") === "connected") {
+          if (window.AgentStudio) {
+            AgentStudio.selectNodeByAgentId("content-director", true);
+            updateYouTubeUI(me.youtube);
+            AgentStudio.logRunEntry({
+              agent: "Content Director",
+              type: "completed",
+              message: `YouTube connected${me.youtube?.channel?.channel_title ? `: ${me.youtube.channel.channel_title}` : ""} — enter your goal and click Run Agent`,
             });
           }
           history.replaceState({}, "", location.pathname);
@@ -325,6 +375,7 @@ const AgentApp = (() => {
     ws.onopen = () => {
       wsReconnectDelay = 3000;
       setLiveStatus(true);
+      pollPendingHitl();
       wsPingTimer = setInterval(() => {
         if (ws?.readyState === WebSocket.OPEN) {
           ws.send('{"type":"ping"}');
@@ -362,6 +413,165 @@ const AgentApp = (() => {
     };
   }
 
+  function setAgentVisualStatus(agentId, status, execTime) {
+    const nodeId = activeNodeRuns[agentId];
+    if (nodeId) {
+      AgentStudio.highlightNodeById(nodeId, status, execTime);
+    } else {
+      AgentStudio.highlightExecution(agentId, status, execTime);
+    }
+  }
+
+  let pendingHitlRequest = null;
+
+  async function pollPendingHitl() {
+    try {
+      const res = await api("/api/agents/human-input/pending");
+      const pending = res?.pending || [];
+      const bar = document.getElementById("hitl-resume-bar");
+      const barText = document.getElementById("hitl-resume-text");
+      if (!pending.length) {
+        bar?.classList.add("hidden");
+        return;
+      }
+      const latest = pending[pending.length - 1];
+      if (!latest?.request_id) return;
+      const overlay = document.getElementById("hitl-overlay");
+      const panelOpen = overlay && !overlay.classList.contains("hidden");
+      if (!panelOpen) {
+        if (bar) {
+          bar.classList.remove("hidden");
+          if (barText) {
+            barText.textContent = `${latest.agent_name || "Agent"} is waiting — ${latest.phase === "review" ? "review output" : "answer questions"}`;
+          }
+        }
+        window.__pendingHitlPayload = latest;
+      }
+      if (pendingHitlRequest?.request_id === latest.request_id && panelOpen) return;
+      showHitlPanel(latest);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function openHitlFromBar() {
+    const payload = window.__pendingHitlPayload || pendingHitlRequest;
+    if (payload) showHitlPanel(payload);
+    else pollPendingHitl();
+  }
+
+  function showHitlPanel(payload) {
+    const overlay = document.getElementById("hitl-overlay");
+    const form = document.getElementById("hitl-form");
+    const outputSection = document.getElementById("hitl-output-section");
+    const outputPre = document.getElementById("hitl-output");
+    if (!overlay || !form) return;
+
+    pendingHitlRequest = payload;
+    window.__pendingHitlPayload = payload;
+    document.getElementById("hitl-resume-bar")?.classList.add("hidden");
+    document.getElementById("hitl-title").textContent = payload.phase === "review"
+      ? "Review agent output"
+      : "Answer a few questions";
+    document.getElementById("hitl-agent").textContent = payload.agent_name || payload.agent_id || "";
+    document.getElementById("hitl-phase").textContent = payload.phase === "review" ? "Review" : "Input";
+
+    const draft = payload.draft_output;
+    if (draft && outputSection && outputPre) {
+      outputSection.classList.remove("hidden");
+      outputPre.textContent = JSON.stringify(draft, null, 2);
+    } else if (outputSection) {
+      outputSection.classList.add("hidden");
+    }
+
+    form.innerHTML = "";
+    (payload.questions || []).forEach((q) => {
+      const field = document.createElement("div");
+      field.className = "hitl-field";
+      const label = document.createElement("label");
+      label.textContent = q.label || q.id;
+      label.setAttribute("for", `hitl-${q.id}`);
+      field.appendChild(label);
+
+      let input;
+      if (q.type === "select") {
+        input = document.createElement("select");
+        (q.options || []).forEach((opt) => {
+          const o = document.createElement("option");
+          o.value = opt;
+          o.textContent = opt;
+          input.appendChild(o);
+        });
+      } else if (q.type === "textarea") {
+        input = document.createElement("textarea");
+        input.placeholder = q.placeholder || "";
+      } else {
+        input = document.createElement("input");
+        input.type = "text";
+        input.placeholder = q.placeholder || "";
+      }
+      input.id = `hitl-${q.id}`;
+      input.name = q.id;
+      input.required = !q.optional;
+      field.appendChild(input);
+      form.appendChild(field);
+    });
+
+    overlay.classList.remove("hidden");
+    overlay.setAttribute("aria-hidden", "false");
+    AgentStudio.switchSidebarTab?.("runs");
+    const submitBtn = document.getElementById("hitl-submit");
+    if (submitBtn) submitBtn.disabled = false;
+  }
+
+  function hideHitlPanel() {
+    const overlay = document.getElementById("hitl-overlay");
+    if (overlay) {
+      overlay.classList.add("hidden");
+      overlay.setAttribute("aria-hidden", "true");
+    }
+    pendingHitlRequest = null;
+  }
+
+  async function submitHitlResponse(e) {
+    e.preventDefault();
+    if (!pendingHitlRequest?.request_id) return;
+    const form = document.getElementById("hitl-form");
+    const submitBtn = document.getElementById("hitl-submit");
+    if (submitBtn) submitBtn.disabled = true;
+    const answers = {};
+    (pendingHitlRequest.questions || []).forEach((q) => {
+      const el = form?.querySelector(`[name="${q.id}"]`);
+      if (el) answers[q.id] = el.value;
+    });
+    try {
+      await api("/api/agents/human-input/respond", "POST", {
+        request_id: pendingHitlRequest.request_id,
+        answers,
+      });
+      const phase = pendingHitlRequest.phase;
+      hideHitlPanel();
+      AgentStudio.logRunEntry({
+        agent: pendingHitlRequest.agent_name || "Agent",
+        agentId: pendingHitlRequest.agent_id || "",
+        type: "progress",
+        message: phase === "review"
+          ? "Approved — continuing workflow…"
+          : "Thanks — generating draft (review panel will appear next)…",
+      });
+    } catch (err) {
+      if (submitBtn) submitBtn.disabled = false;
+      AgentStudio.logRunEntry({
+        agent: "System",
+        type: "error",
+        message: err.message || "Failed to submit response",
+      });
+    }
+  }
+
+  document.getElementById("hitl-form")?.addEventListener("submit", submitHitlResponse);
+  document.getElementById("hitl-resume-btn")?.addEventListener("click", openHitlFromBar);
+
   function handleEvent(event) {
     const agentId = event.agent_id;
     const agentName = event.agent_name;
@@ -386,21 +596,33 @@ const AgentApp = (() => {
 
     if (type === "started") {
       runTimings[agentId] = Date.now();
-      AgentStudio.highlightExecution(agentId, "running");
+      setAgentVisualStatus(agentId, "running");
     }
 
     if (type === "error") {
       failedRuns++;
       const elapsed = runTimings[agentId] ? ((Date.now() - runTimings[agentId]) / 1000).toFixed(1) : null;
-      AgentStudio.highlightExecution(agentId, "error", elapsed);
+      setAgentVisualStatus(agentId, "error", elapsed);
+      delete activeNodeRuns[agentId];
       updateSuccessMetrics();
+      maybeFinishStandaloneRun("failed");
+    }
+
+    if (type === "cancelled") {
+      const elapsed = runTimings[agentId] ? ((Date.now() - runTimings[agentId]) / 1000).toFixed(1) : null;
+      setAgentVisualStatus(agentId, "idle", elapsed);
+      delete activeNodeRuns[agentId];
+      delete runTimings[agentId];
+      maybeFinishStandaloneRun("stopped");
     }
 
     if (type === "completed") {
       completedRuns++;
       const elapsed = runTimings[agentId] ? ((Date.now() - runTimings[agentId]) / 1000).toFixed(1) : null;
-      AgentStudio.highlightExecution(agentId, "done", elapsed);
+      setAgentVisualStatus(agentId, "done", elapsed);
+      delete activeNodeRuns[agentId];
       updateSuccessMetrics();
+      maybeFinishStandaloneRun("completed");
 
       if (agentId === "invoice-matcher" && event.data) {
         AgentStudio.setMetricSuccess(
@@ -409,6 +631,26 @@ const AgentApp = (() => {
             : null
         );
       }
+    }
+
+    if (type === "awaiting_input" && event.data?.request_id) {
+      showHitlPanel(event.data);
+      setAgentVisualStatus(agentId, "running");
+    }
+
+    if (type === "progress" && event.data?.hitl?.request_id) {
+      showHitlPanel(event.data.hitl);
+    }
+
+    if (type === "agent_output" && event.data?.result) {
+      AgentStudio.logRunEntry({
+        agent: agentName,
+        agentId,
+        type: "agent_output",
+        message: event.message,
+        time: event.timestamp,
+        outputPreview: event.data.result,
+      });
     }
 
     if (type === "match" || type === "exception" || type === "categorized" || type === "attachment_saved") {
@@ -481,6 +723,111 @@ const AgentApp = (() => {
     try {
       const me = await Auth.getMe();
       updateGmailUI(me.gmail);
+      updateYouTubeUI(me.youtube);
+    } catch { /* ignore */ }
+  }
+
+  async function connectGmail() {
+    try {
+      const { auth_url } = await api("/api/gmail/auth-url");
+      if (!auth_url || !auth_url.startsWith("https://accounts.google.com/")) {
+        throw new Error("Invalid OAuth URL from server. Check credentials and .env redirect URI.");
+      }
+      const hint = document.getElementById("gmail-hint");
+      if (hint) hint.textContent = "Redirecting to Google sign-in…";
+      window.location.href = auth_url;
+    } catch (e) {
+      const hint = document.getElementById("gmail-hint");
+      if (hint) {
+        hint.textContent = e.message;
+        hint.className = "prop-hint";
+      }
+      AgentStudio.appendConsole("logs", { agent: "Gmail Organizer", type: "error", message: e.message, time: new Date() });
+    }
+  }
+
+  function updateYouTubeUI(youtube) {
+    const hints = [
+      document.getElementById("youtube-hint"),
+      document.getElementById("sidebar-youtube-hint"),
+    ].filter(Boolean);
+    const connectBtns = [
+      document.getElementById("btn-connect-youtube"),
+      document.getElementById("sidebar-btn-connect-youtube"),
+    ].filter(Boolean);
+    const disconnectBtns = [
+      document.getElementById("btn-disconnect-youtube"),
+      document.getElementById("sidebar-btn-disconnect-youtube"),
+    ].filter(Boolean);
+
+    AgentStudio.setYouTubeConnected?.(!!youtube?.connected);
+
+    const connected = !!youtube?.connected;
+    const title = youtube?.channel?.channel_title;
+    const subs = youtube?.channel?.subscriber_count;
+
+    hints.forEach((hint) => {
+      if (connected && title) {
+        const subLabel = subs != null ? ` · ${Number(subs).toLocaleString()} subscribers` : "";
+        hint.textContent = `Connected: ${title}${subLabel}`;
+        hint.className = hint.id === "sidebar-youtube-hint" ? "connection-hint connected" : "prop-hint connected";
+      } else {
+        hint.textContent = hint.id === "sidebar-youtube-hint"
+          ? "Connect your channel for CreatorOS"
+          : "Connect your YouTube channel to enable publishing, analytics, and trend research.";
+        hint.className = hint.id === "sidebar-youtube-hint" ? "connection-hint" : "prop-hint";
+      }
+    });
+
+    connectBtns.forEach((btn) => {
+      btn.textContent = connected ? "YouTube connected" : "Connect YouTube";
+      btn.classList.toggle("btn-connected", connected);
+      btn.disabled = connected;
+    });
+    disconnectBtns.forEach((btn) => btn.classList.toggle("hidden", !connected));
+  }
+
+  async function refreshYouTubeStatus() {
+    try {
+      const data = await api("/api/youtube/status");
+      updateYouTubeUI({ connected: data.connected, channel: data.channel });
+    } catch { /* ignore */ }
+  }
+
+  async function connectYouTube() {
+    try {
+      const { auth_url } = await api("/api/youtube/auth-url");
+      if (!auth_url?.startsWith("https://accounts.google.com/")) {
+        throw new Error("Invalid OAuth URL. Enable YouTube Data API v3 in Google Cloud Console.");
+      }
+      const hint = document.getElementById("youtube-hint") || document.getElementById("sidebar-youtube-hint");
+      if (hint) hint.textContent = "Redirecting to Google sign-in…";
+      window.location.href = auth_url;
+    } catch (e) {
+      AgentStudio.logRunEntry?.({ agent: "System", type: "error", message: e.message });
+    }
+  }
+
+  async function disconnectYouTube() {
+    await api("/api/youtube/disconnect", "POST");
+    updateYouTubeUI({ connected: false, channel: null });
+  }
+
+  function bindYouTubeActions() {
+    ["btn-connect-youtube", "sidebar-btn-connect-youtube"].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.onclick = connectYouTube;
+    });
+    ["btn-disconnect-youtube", "sidebar-btn-disconnect-youtube"].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.onclick = disconnectYouTube;
+    });
+  }
+
+  async function refreshGmailStatusOnly() {
+    try {
+      const me = await Auth.getMe();
+      updateGmailUI(me.gmail);
     } catch { /* ignore */ }
   }
 
@@ -502,26 +849,7 @@ const AgentApp = (() => {
 
     const btnConnect = document.getElementById("btn-connect-gmail");
     const btnDisconnect = document.getElementById("btn-disconnect-gmail");
-    if (btnConnect) {
-      btnConnect.onclick = async () => {
-        try {
-          const { auth_url } = await api("/api/gmail/auth-url");
-          if (!auth_url || !auth_url.startsWith("https://accounts.google.com/")) {
-            throw new Error("Invalid OAuth URL from server. Check credentials and .env redirect URI.");
-          }
-          const hint = document.getElementById("gmail-hint");
-          if (hint) hint.textContent = "Redirecting to Google sign-in…";
-          window.location.href = auth_url;
-        } catch (e) {
-          const hint = document.getElementById("gmail-hint");
-          if (hint) {
-            hint.textContent = e.message;
-            hint.className = "prop-hint";
-          }
-          AgentStudio.appendConsole("logs", { agent: "Gmail Organizer", type: "error", message: e.message, time: new Date() });
-        }
-      };
-    }
+    if (btnConnect) btnConnect.onclick = connectGmail;
     if (btnDisconnect) {
       btnDisconnect.onclick = async () => {
         await api("/api/gmail/disconnect", "POST");
@@ -530,8 +858,12 @@ const AgentApp = (() => {
     }
 
     if (agentId === "gmail-organizer" || agentId === "gmail-calendar") {
-      refreshGmailStatus();
+      refreshGmailStatusOnly();
     }
+    if (AgentStudio.needsYouTubeConnection?.(agentId)) {
+      refreshYouTubeStatus();
+    }
+    bindYouTubeActions();
 
     const plannerTask = document.getElementById("planner-task");
     const workflowTask = document.getElementById("workflow-task");
@@ -542,12 +874,49 @@ const AgentApp = (() => {
     }
   }
 
+  async function enrichRunConfig(agentId, nodeId, config) {
+    const node = nodeId ? AgentStudio.getNodeById(nodeId) : null;
+    let enriched = { ...config };
+
+    if (nodeId && node && window.AgentModelRouter?.isAutoModel(enriched.model)) {
+      let text = (enriched.text || enriched.source || enriched.question || "").trim();
+      if (!text && nodeId) {
+        text = (await resolveUpstreamInputText(nodeId)).trim();
+      }
+      const ctx = {
+        ...AgentStudio.buildModelContext(node, enriched),
+        text: text || AgentStudio.buildModelContext(node, enriched).text,
+        task: AgentStudio.getWorkflowTask() || "",
+      };
+      if (agentId === "planner") {
+        ctx.connected_agents = nodeId
+          ? AgentStudio.getDownstreamAgentIds(nodeId)
+          : (enriched.connectedAgents || []);
+      }
+      enriched = AgentStudio.resolveAgentModel(enriched, ctx);
+      const pick = enriched._modelPick;
+      if (pick && nodeId) {
+        AgentStudio.setNodeResolvedModel(nodeId, pick);
+        const modelName = window.AgentModels?.getModel(pick.modelId)?.name || pick.modelId;
+        AgentStudio.logRunEntry({
+          agent: AgentStudio.getAgent(agentId)?.name || agentId,
+          agentId,
+          type: "progress",
+          message: `Auto model: ${modelName} — ${pick.reason}`,
+        });
+      }
+    }
+
+    return enriched;
+  }
+
   async function runAgent(agentId, options = {}) {
     const agent = AgentStudio.getAgent(agentId);
     const nodeId = options.nodeId;
-    const config = options.config || (nodeId ? AgentStudio.getNodeConfig(nodeId) : {});
-    const runId = options.runId ?? AgentStudio.getCurrentRunId?.() ?? null;
-    const runPayload = runId ? { run_id: runId } : {};
+    let config = options.config || (nodeId ? AgentStudio.getNodeConfig(nodeId) : {});
+    config = await enrichRunConfig(agentId, nodeId, config);
+    const runId = options.runId ?? ensureAgentRunRecord(agentId, config);
+    const runPayload = { run_id: runId };
 
     if (agentId === "planner") {
       const task = AgentStudio.getWorkflowTask() || "Organize today's emails and reconcile invoices";
@@ -598,6 +967,7 @@ const AgentApp = (() => {
       }
       if (nodeId) AgentStudio.highlightNodeById(nodeId, "done", "0.5");
       else AgentStudio.highlightExecution(agentId, "done", "0.5");
+      maybeFinishStandaloneRun("completed");
       return plan;
     }
 
@@ -611,164 +981,421 @@ const AgentApp = (() => {
       await delay(500);
       if (nodeId) AgentStudio.highlightNodeById(nodeId, "done", "0.5");
       else AgentStudio.highlightExecution(agentId, "done", "0.5");
+      maybeFinishStandaloneRun("completed");
       return null;
     }
 
     AgentStudio.selectNodeByAgentId(agentId);
-    if (nodeId) AgentStudio.highlightNodeById(nodeId, "running");
-    else AgentStudio.highlightExecution(agentId, "running");
+    if (nodeId) {
+      activeNodeRuns[agentId] = nodeId;
+      AgentStudio.highlightNodeById(nodeId, "running");
+    } else {
+      AgentStudio.highlightExecution(agentId, "running");
+    }
 
-    if (agentId === "invoice-matcher") {
-      await api("/api/agents/invoice-matcher/run", "POST", runPayload);
-    } else if (agentId === "gmail-organizer") {
-      await api("/api/agents/gmail-organizer/run", "POST", {
-        max_messages: config.max_messages || 200,
-        scan_date: config.scan_date || null,
-        ...runPayload,
-      });
-    } else if (agentId === "telecaller") {
-      await api("/api/agents/telecaller/run", "POST", {
-        phone_numbers: config.phone_numbers || [],
-        message: config.message || "Hello",
-        calls: config.calls || [],
-        ...runPayload,
-      });
-    } else if (agentId === "mailer") {
-      await api("/api/agents/mailer/run", "POST", {
-        to: config.to || [],
-        subject: config.subject || "Hello",
-        body: config.body || "Hello",
-        ...runPayload,
-      });
-    } else if (agentId === "gmail-calendar") {
-      await api("/api/agents/gmail-calendar/run", "POST", {
-        action: config.action || "list_events",
-        date_from: config.date_from || null,
-        date_to: config.date_to || null,
-        max_results: config.max_results || 25,
-        event_title: config.event_title || "Meeting",
-        event_start: config.event_start || null,
-        event_duration_minutes: config.event_duration_minutes || 30,
-        attendees: config.attendees || [],
-        ...runPayload,
-      });
-    } else if (agentId === "whatsapp") {
-      await api("/api/agents/whatsapp/run", "POST", {
-        phone_numbers: config.phone_numbers || [],
-        message: config.message || "Hello",
-        messages: config.messages || [],
-        ...runPayload,
-      });
-    } else if (agentId === "data-scraper") {
-      await api("/api/agents/data-scraper/run", "POST", {
-        urls: config.urls || [],
-        css_selector: config.css_selector || "",
-        extract_links: config.extract_links !== false,
-        max_links: config.max_links || 20,
-        ...runPayload,
-      });
-    } else if (agentId === "file-download") {
-      await api("/api/agents/file-download/run", "POST", {
-        urls: config.urls || [],
-        filenames: config.filenames || [],
-        ...runPayload,
-      });
-    } else if (agent?.category === "understanding") {
-      let text = (config.text || "").trim();
-      if (!text && nodeId) {
-        text = (await resolveUpstreamInputText(nodeId)).trim();
-      }
-      await api("/api/agents/understanding/run", "POST", {
-        agent_id: agentId,
-        text,
-        reference_text: config.reference_text || "",
-        agent_config: {
-          prompt: config.prompt,
-          model: config.model,
-          temperature: config.temperature,
-        },
-        ...runPayload,
-      });
-    } else if (agentId === "org-knowledge-base") {
-      let sources = config.sources || [];
-      let folderPath = (config.folder_path || "").trim();
-      const upstreamFolder = nodeId ? (await resolveUpstreamFolder(nodeId)).trim() : "";
-      if (upstreamFolder && (!folderPath || folderPath === "invoices")) {
-        folderPath = upstreamFolder;
-      } else if (!folderPath && !sources.length) {
-        folderPath = upstreamFolder || ".";
-      }
-      if (!sources.length || sources.every((s) => !String(s.folder || s.path || "").trim())) {
-        sources = [{ type: "folder_pdf", folder: folderPath || "." }];
-      } else if (folderPath) {
-        sources = sources.map((s) => {
-          if (String(s.type || "").toLowerCase().includes("folder") || s.type === "folder_pdf") {
-            const f = String(s.folder || s.path || "").trim();
-            return { ...s, type: "folder_pdf", folder: f || folderPath };
+    try {
+      if (agentId === "invoice-matcher") {
+        await api("/api/agents/invoice-matcher/run", "POST", runPayload);
+      } else if (agentId === "gmail-organizer") {
+        await api("/api/agents/gmail-organizer/run", "POST", {
+          max_messages: config.max_messages || 200,
+          scan_date: config.scan_date || null,
+          ...runPayload,
+        });
+      } else if (agentId === "telecaller") {
+        await api("/api/agents/telecaller/run", "POST", {
+          phone_numbers: config.phone_numbers || [],
+          message: config.message || "Hello",
+          calls: config.calls || [],
+          ...runPayload,
+        });
+      } else if (agentId === "mailer") {
+        await api("/api/agents/mailer/run", "POST", {
+          to: config.to || [],
+          subject: config.subject || "Hello",
+          body: config.body || "Hello",
+          ...runPayload,
+        });
+      } else if (agentId === "gmail-calendar") {
+        await api("/api/agents/gmail-calendar/run", "POST", {
+          action: config.action || "list_events",
+          date_from: config.date_from || null,
+          date_to: config.date_to || null,
+          max_results: config.max_results || 25,
+          event_title: config.event_title || "Meeting",
+          event_start: config.event_start || null,
+          event_duration_minutes: config.event_duration_minutes || 30,
+          attendees: config.attendees || [],
+          ...runPayload,
+        });
+      } else if (agentId === "whatsapp") {
+        await api("/api/agents/whatsapp/run", "POST", {
+          phone_numbers: config.phone_numbers || [],
+          message: config.message || "Hello",
+          messages: config.messages || [],
+          ...runPayload,
+        });
+      } else if (agentId === "data-scraper") {
+        await api("/api/agents/data-scraper/run", "POST", {
+          urls: config.urls || [],
+          css_selector: config.css_selector || "",
+          extract_links: config.extract_links !== false,
+          max_links: config.max_links || 20,
+          ...runPayload,
+        });
+      } else if (agentId === "file-download") {
+        await api("/api/agents/file-download/run", "POST", {
+          urls: config.urls || [],
+          filenames: config.filenames || [],
+          ...runPayload,
+        });
+      } else if (agent?.category === "understanding") {
+        let text = (config.text || "").trim();
+        if (!text && nodeId) {
+          text = (await resolveUpstreamInputText(nodeId)).trim();
+        }
+        await api("/api/agents/understanding/run", "POST", {
+          agent_id: agentId,
+          text,
+          reference_text: config.reference_text || "",
+          agent_config: {
+            prompt: config.prompt,
+            model: config.model,
+            temperature: config.temperature,
+          },
+          ...runPayload,
+        });
+      } else if (agentId === "org-knowledge-base") {
+        let sources = config.sources || [];
+        let folderPath = (config.folder_path || "").trim();
+        const upstreamFolder = nodeId ? (await resolveUpstreamFolder(nodeId)).trim() : "";
+        if (upstreamFolder && (!folderPath || folderPath === "invoices")) {
+          folderPath = upstreamFolder;
+        } else if (!folderPath && !sources.length) {
+          folderPath = upstreamFolder || ".";
+        }
+        if (!sources.length || sources.every((s) => !String(s.folder || s.path || "").trim())) {
+          sources = [{ type: "folder_pdf", folder: folderPath || "." }];
+        } else if (folderPath) {
+          sources = sources.map((s) => {
+            if (String(s.type || "").toLowerCase().includes("folder") || s.type === "folder_pdf") {
+              const f = String(s.folder || s.path || "").trim();
+              return { ...s, type: "folder_pdf", folder: f || folderPath };
+            }
+            return s;
+          });
+        }
+        await api("/api/agents/org-knowledge-base/run", "POST", {
+          action: config.action || "build",
+          collection: config.collection || "org-knowledge",
+          folder_path: folderPath,
+          sources,
+          question: config.question || "",
+          top_k: 8,
+          ...runPayload,
+        });
+      } else if (agentId === "content-director") {
+        await api("/api/agents/content-director/run", "POST", {
+          creator_type: config.creator_type || "Content Creator",
+          niche: config.niche || "",
+          platforms: config.platforms?.length ? config.platforms : ["YouTube", "LinkedIn", "Twitter"],
+          goal: config.goal || "Grow followers and leads",
+          agent_config: {
+            prompt: config.prompt,
+            model: config.model,
+            temperature: config.temperature,
+            human_in_loop: config.human_in_loop !== false,
+          },
+          ...runPayload,
+        });
+      } else if (agent?.category === "content") {
+        let context = {};
+        if (nodeId) {
+          const upstreamIds = AgentStudio.getUpstreamNodeIds?.(nodeId) || [];
+          for (const upId of upstreamIds) {
+            const upNode = AgentStudio.getNodeById?.(upId);
+            if (!upNode?.agentId) continue;
+            const row = await fetchLatestAgentResult(upNode.agentId);
+            if (row?.result) {
+              context[upNode.agentId] = row.result.result || row.result;
+            }
           }
-          return s;
+        }
+        await api("/api/agents/content/run", "POST", {
+          agent_id: agentId,
+          creator_type: config.creator_type || "Content Creator",
+          niche: config.niche || config.creator_type || "",
+          platforms: config.platforms?.length ? config.platforms : ["YouTube", "LinkedIn", "Twitter"],
+          goal: config.goal || "Grow followers and leads",
+          context,
+          agent_config: {
+            prompt: config.prompt,
+            model: config.model,
+            temperature: config.temperature,
+            human_in_loop: config.human_in_loop !== false,
+          },
+          ...runPayload,
+        });
+      } else if (agent?.category === "perception") {
+        let source = (config.folder_path || config.source || config.text || "").trim();
+        if (!source && nodeId) {
+          if (agentId === "read-pdf") {
+            source = (await resolveUpstreamFolder(nodeId)).trim();
+          }
+          if (!source) {
+            source = (await resolveUpstreamInputText(nodeId)).trim();
+          }
+        }
+        await api("/api/agents/perception/run", "POST", {
+          agent_id: agentId,
+          source,
+          folder_path: agentId === "read-pdf" ? source : (config.folder_path || ""),
+          agent_config: {
+            prompt: config.prompt,
+            model: config.model,
+            temperature: config.temperature,
+          },
+          ...runPayload,
         });
       }
-      await api("/api/agents/org-knowledge-base/run", "POST", {
-        action: config.action || "build",
-        collection: config.collection || "org-knowledge",
-        folder_path: folderPath,
-        sources,
-        question: config.question || "",
-        top_k: 8,
-        ...runPayload,
-      });
-    } else if (agent?.category === "perception") {
-      let source = (config.folder_path || config.source || config.text || "").trim();
-      if (!source && nodeId) {
-        if (agentId === "read-pdf") {
-          source = (await resolveUpstreamFolder(nodeId)).trim();
-        }
-        if (!source) {
-          source = (await resolveUpstreamInputText(nodeId)).trim();
-        }
+
+      await waitForAgent(agentId, nodeId);
+      maybeFinishStandaloneRun("completed");
+    } catch (err) {
+      if (nodeId) AgentStudio.highlightNodeById(nodeId, "error");
+      else AgentStudio.highlightExecution(agentId, "error");
+      delete activeNodeRuns[agentId];
+      maybeFinishStandaloneRun("failed");
+      throw err;
+    } finally {
+      if (activeNodeRuns[agentId] === nodeId) {
+        delete activeNodeRuns[agentId];
       }
-      await api("/api/agents/perception/run", "POST", {
-        agent_id: agentId,
-        source,
-        folder_path: agentId === "read-pdf" ? source : (config.folder_path || ""),
-        agent_config: {
-          prompt: config.prompt,
-          model: config.model,
-          temperature: config.temperature,
-        },
-        ...runPayload,
-      });
     }
     return null;
   }
 
-  async function runWorkflow() {
+  function collectCompletedNodeIds(order) {
+    const ids = [];
+    order.forEach((node) => {
+      const live = AgentStudio.getNodeById?.(node.id);
+      const status = live?.status || node.status;
+      if (status === "done") ids.push(node.id);
+    });
+    return ids;
+  }
+
+  function resetRunningNodes(order) {
+    order.forEach((node) => {
+      const live = AgentStudio.getNodeById?.(node.id);
+      const status = live?.status || node.status;
+      if (status === "running") AgentStudio.highlightNodeById(node.id, "idle");
+    });
+  }
+
+  function beginWorkflowRun(task, options = {}) {
+    workflowRunning = true;
+    standaloneRunActive = false;
+    workflowStopRequested = false;
+    workflowAbortController = new AbortController();
+    AgentStudio.updateWorkflowControlButtons?.();
+    return AgentStudio.startWorkflowRun(task, options);
+  }
+
+  function endWorkflowRunControls() {
+    workflowRunning = false;
+    workflowStopRequested = false;
+    workflowAbortController = null;
+    AgentStudio.updateWorkflowControlButtons?.();
+  }
+
+  async function stopWorkflow() {
+    if (!workflowRunning) return;
+    workflowStopRequested = true;
+    workflowAbortController?.abort();
+    const runId = AgentStudio.getCurrentRunId?.();
+    try {
+      await api("/api/agents/cancel-all", "POST", { run_id: runId });
+      await api("/api/workflows/cancel", "POST", { run_id: runId });
+    } catch {
+      /* ignore cancel errors */
+    }
+    AgentStudio.logRunEntry({
+      agent: "System",
+      type: "cancelled",
+      message: "Workflow stop requested",
+    });
+  }
+
+  async function stopAgent(agentId, nodeId) {
+    workflowStopRequested = true;
+    const runId = AgentStudio.getCurrentRunId?.();
+    const toCancel = new Set([agentId]);
+    if (agentId.startsWith("content-") && agentId !== "content-director") {
+      toCancel.add("content-director");
+    }
+    if (agentId === "content-director") {
+      AgentStudio.getWorkflowSnapshot?.().nodes
+        ?.filter((n) => n.agentId?.startsWith("content-"))
+        .forEach((n) => toCancel.add(n.agentId));
+    }
+    for (const id of toCancel) {
+      try {
+        await api(`/api/agents/${encodeURIComponent(id)}/cancel`, "POST", { run_id: runId });
+      } catch {
+        /* ignore */
+      }
+    }
+    hideHitlPanel?.();
+    if (nodeId) AgentStudio.highlightNodeById(nodeId, "idle");
+    else AgentStudio.highlightExecution(agentId, "idle");
+    AgentStudio.logRunEntry({
+      agent: AgentStudio.getAgent(agentId)?.name || agentId,
+      agentId,
+      type: "cancelled",
+      message: "Agent stop requested",
+    });
+  }
+
+  async function runWorkflowLangChain(options = {}) {
+    const snap = AgentStudio.getWorkflowSnapshot?.();
+    if (!snap?.nodes?.length) {
+      AgentStudio.logRunEntry({ agent: "System", type: "error", message: "Workflow is empty" });
+      return;
+    }
+
+    const checkpoint = options.checkpoint || null;
+    const task = checkpoint?.task || AgentStudio.getWorkflowTask() || "Run workflow";
+    AgentStudio.setWorkflowTask(task);
+    const runId = beginWorkflowRun(task, {
+      reuseRunId: options.reuseRunId || null,
+      checkpoint,
+    });
+
+    const agentNodes = snap.nodes.filter((n) => n.agentId && n.kind !== "model");
+    const skipIds = new Set(checkpoint?.completedNodeIds || []);
+    agentNodes.forEach((n) => {
+      if (skipIds.has(n.id)) AgentStudio.highlightNodeById(n.id, "done", "—");
+      else if (!workflowStopRequested) AgentStudio.highlightNodeById(n.id, "running");
+    });
+
+    AgentStudio.logRunEntry({
+      agent: "System",
+      type: "started",
+      message: checkpoint
+        ? `Resuming LangGraph workflow (${agentNodes.length - skipIds.size} steps remaining)`
+        : `LangGraph workflow (${agentNodes.length} agents)`,
+    });
+
+    let stopped = false;
+    try {
+      const result = await api("/api/workflows/run", "POST", {
+        task,
+        run_id: runId,
+        nodes: agentNodes,
+        edges: snap.edges || [],
+        agent_configs: snap.agent_configs || {},
+        use_langchain: true,
+        skip_node_ids: [...skipIds],
+      }, workflowAbortController?.signal);
+
+      if (result.status === "stopped" || workflowStopRequested) {
+        stopped = true;
+        const completed = result.node_order || collectCompletedNodeIds(agentNodes);
+        completed.forEach((nid) => AgentStudio.highlightNodeById(nid, "done", "—"));
+        resetRunningNodes(agentNodes);
+        AgentStudio.saveWorkflowCheckpoint({
+          completedNodeIds: completed,
+          plan: checkpoint?.plan || null,
+          task,
+        });
+        AgentStudio.logRunEntry({
+          agent: "System",
+          type: "cancelled",
+          message: "Workflow stopped — click Resume to continue",
+        });
+      } else {
+        agentNodes.forEach((n) => AgentStudio.highlightNodeById(n.id, "done", "1.0"));
+        AgentStudio.logRunEntry({
+          agent: "LangGraph",
+          type: "completed",
+          message: `Engine: ${result.engine || "langgraph"} — ${Object.keys(result.results || {}).length} steps`,
+        });
+        AgentStudio.finishWorkflowRun("completed");
+      }
+    } catch (e) {
+      if (workflowStopRequested || e.name === "AbortError") {
+        stopped = true;
+        const completed = collectCompletedNodeIds(agentNodes);
+        resetRunningNodes(agentNodes);
+        AgentStudio.saveWorkflowCheckpoint({
+          completedNodeIds: completed,
+          plan: checkpoint?.plan || null,
+          task,
+        });
+        AgentStudio.logRunEntry({
+          agent: "System",
+          type: "cancelled",
+          message: "Workflow stopped — click Resume to continue",
+        });
+      } else {
+        agentNodes.forEach((n) => {
+          if (!skipIds.has(n.id)) AgentStudio.highlightNodeById(n.id, "error");
+        });
+        AgentStudio.logRunEntry({ agent: "LangGraph", type: "error", message: e.message });
+        AgentStudio.finishWorkflowRun("failed");
+      }
+    } finally {
+      endWorkflowRunControls();
+    }
+  }
+
+  async function runWorkflowSequential(options = {}) {
     const order = AgentStudio.getExecutionOrder();
     if (!order.length) {
       AgentStudio.logRunEntry({ agent: "System", type: "error", message: "Workflow is empty" });
       return;
     }
 
-    const task = AgentStudio.getWorkflowTask() || "Organize today's emails and reconcile invoices";
+    const checkpoint = options.checkpoint || null;
+    const completedSet = new Set(checkpoint?.completedNodeIds || []);
+    const task = checkpoint?.task || AgentStudio.getWorkflowTask() || "Organize today's emails and reconcile invoices";
     AgentStudio.setWorkflowTask(task);
-    AgentStudio.startWorkflowRun(task);
-
-    AgentStudio.logRunEntry({
-      agent: "System", type: "started",
-      message: `Running workflow (${order.length} steps)`,
+    beginWorkflowRun(task, {
+      reuseRunId: options.reuseRunId || null,
+      checkpoint,
     });
 
-    let plan = null;
+    AgentStudio.logRunEntry({
+      agent: "System",
+      type: "started",
+      message: checkpoint
+        ? `Resuming workflow (${order.length - completedSet.size} steps remaining)`
+        : `Running workflow (${order.length} steps)`,
+    });
+
+    let plan = checkpoint?.plan || null;
     let failed = false;
+    let stopped = false;
 
     for (const node of order) {
+      if (workflowStopRequested) {
+        stopped = true;
+        break;
+      }
+
+      if (completedSet.has(node.id)) {
+        AgentStudio.highlightNodeById(node.id, "done");
+        continue;
+      }
+
       const agentId = node.agentId;
       const agent = AgentStudio.getAgent(agentId);
 
       try {
         if (agentId === "planner") {
           plan = await runAgent(agentId, { nodeId: node.id });
+          if (workflowStopRequested) { stopped = true; break; }
           continue;
         }
 
@@ -781,6 +1408,7 @@ const AgentApp = (() => {
             message: node.id === "n-input" ? `Task: ${task}` : "Delivering workflow results",
           });
           await delay(400);
+          if (workflowStopRequested) { stopped = true; break; }
           AgentStudio.highlightNodeById(node.id, "done", "0.4");
           continue;
         }
@@ -799,12 +1427,13 @@ const AgentApp = (() => {
           config: AgentStudio.getNodeConfig(node.id),
         });
 
-        if (agent?.runnable) {
-          await waitForAgent(agentId);
-        }
-
+        if (workflowStopRequested) { stopped = true; break; }
         await delay(400);
       } catch (e) {
+        if (workflowStopRequested || e.name === "AbortError") {
+          stopped = true;
+          break;
+        }
         failed = true;
         AgentStudio.highlightNodeById(node.id, "error");
         AgentStudio.logRunEntry({
@@ -816,17 +1445,78 @@ const AgentApp = (() => {
       }
     }
 
-    AgentStudio.finishWorkflowRun(failed ? "failed" : "completed");
+    if (stopped) {
+      const completedNodeIds = collectCompletedNodeIds(order);
+      resetRunningNodes(order);
+      AgentStudio.saveWorkflowCheckpoint({
+        completedNodeIds,
+        plan,
+        task,
+      });
+      AgentStudio.logRunEntry({
+        agent: "System",
+        type: "cancelled",
+        message: "Workflow stopped — click Resume to continue",
+      });
+    } else {
+      AgentStudio.finishWorkflowRun(failed ? "failed" : "completed");
+    }
+    endWorkflowRunControls();
   }
 
-  function waitForAgent(agentId, timeoutMs = 120000) {
+  async function runWorkflow(options = {}) {
+    if (workflowRunning) return;
+    const useLangchain = document.getElementById("use-langchain")?.checked;
+    if (useLangchain) {
+      return runWorkflowLangChain(options);
+    }
+    return runWorkflowSequential(options);
+  }
+
+  async function resumeWorkflow(runId) {
+    if (workflowRunning) return;
+    const checkpoint = AgentStudio.getRunCheckpoint?.(runId);
+    if (!checkpoint?.completedNodeIds?.length) {
+      AgentStudio.logRunEntry({ agent: "System", type: "error", message: "Nothing to resume for this run" });
+      return;
+    }
+    if (checkpoint.task) AgentStudio.setWorkflowTask(checkpoint.task);
+    return runWorkflow({ reuseRunId: runId, checkpoint });
+  }
+
+  function waitForAgent(agentId, nodeId, timeoutMs = 600000) {
     return new Promise((resolve) => {
       const start = Date.now();
-      const poll = () => {
+      const poll = async () => {
+        if (workflowStopRequested) return resolve();
+
         const status = AgentStudio.getAgentStatus(agentId);
-        if (status === "done" || status === "error") return resolve();
-        if (Date.now() - start > timeoutMs) return resolve();
-        setTimeout(poll, 600);
+        if (status === "done" || status === "error" || status === "idle") return resolve();
+
+        try {
+          await pollPendingHitl();
+          const server = await api("/api/agents/status");
+          if (server && server[agentId] === false) {
+            const current = AgentStudio.getAgentStatus(agentId);
+            if (current === "running") {
+              const elapsed = runTimings[agentId]
+                ? ((Date.now() - runTimings[agentId]) / 1000).toFixed(1)
+                : null;
+              setAgentVisualStatus(agentId, "done", elapsed);
+            }
+            return resolve();
+          }
+        } catch {
+          /* server poll optional */
+        }
+
+        if (Date.now() - start > timeoutMs) {
+          if (AgentStudio.getAgentStatus(agentId) === "running") {
+            setAgentVisualStatus(agentId, "error");
+          }
+          return resolve();
+        }
+        setTimeout(poll, 800);
       };
       setTimeout(poll, 1000);
     });
@@ -989,9 +1679,16 @@ const AgentApp = (() => {
   return {
     init,
     bindPropertyActions,
+    pollPendingHitl,
+    openHitlFromBar,
     runAgent,
     runWorkflow,
+    stopWorkflow,
+    stopAgent,
+    resumeWorkflow,
     refreshGmailStatus,
+    connectGmail,
+    connectYouTube,
     api,
   };
 })();

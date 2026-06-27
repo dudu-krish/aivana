@@ -12,6 +12,7 @@ from app.agents.base import BaseAgent
 from app.agents.understanding_registry import UNDERSTANDING_AGENTS, agent_name
 from app.services.event_bus import event_bus
 from app.services.llm import LLMError, complete_json, llm_configured
+from app.services.model_router import apply_model_routing
 from app.services.tenant import TenantContext
 
 _WORD_RE = re.compile(r"[A-Za-z0-9']+")
@@ -267,6 +268,12 @@ class UnderstandingAgent(BaseAgent):
         text = str(kwargs.get("text") or "").strip()
         reference_text = str(kwargs.get("reference_text") or "").strip()
         agent_config = kwargs.get("agent_config") or {}
+        agent_config = apply_model_routing(
+            agent_config,
+            agent_id=self.agent_id,
+            text=text,
+            prompt=str(agent_config.get("prompt") or ""),
+        )
 
         if not text:
             await self._emit("error", "No input text. Add text in the agent configuration.")

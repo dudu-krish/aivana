@@ -40,6 +40,15 @@ CREATE TABLE IF NOT EXISTS gmail_connections (
     connected_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS youtube_connections (
+    user_id TEXT PRIMARY KEY REFERENCES users(id),
+    channel_id TEXT NOT NULL,
+    channel_title TEXT NOT NULL,
+    channel_url TEXT NOT NULL,
+    subscriber_count INTEGER NOT NULL DEFAULT 0,
+    connected_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS user_preferences (
     user_id TEXT PRIMARY KEY REFERENCES users(id),
     use_case TEXT NOT NULL DEFAULT 'all',
@@ -227,6 +236,43 @@ def get_gmail_connection(user_id: str) -> sqlite3.Row | None:
 def clear_gmail_connection(user_id: str) -> None:
     with get_db() as conn:
         conn.execute("DELETE FROM gmail_connections WHERE user_id = ?", (user_id,))
+
+
+def save_youtube_connection(
+    user_id: str,
+    *,
+    channel_id: str,
+    channel_title: str,
+    channel_url: str,
+    subscriber_count: int = 0,
+) -> None:
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO youtube_connections
+                (user_id, channel_id, channel_title, channel_url, subscriber_count, connected_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                channel_id = excluded.channel_id,
+                channel_title = excluded.channel_title,
+                channel_url = excluded.channel_url,
+                subscriber_count = excluded.subscriber_count,
+                connected_at = excluded.connected_at
+            """,
+            (user_id, channel_id, channel_title, channel_url, subscriber_count, _utcnow()),
+        )
+
+
+def get_youtube_connection(user_id: str) -> sqlite3.Row | None:
+    with get_db() as conn:
+        return conn.execute(
+            "SELECT * FROM youtube_connections WHERE user_id = ?", (user_id,)
+        ).fetchone()
+
+
+def clear_youtube_connection(user_id: str) -> None:
+    with get_db() as conn:
+        conn.execute("DELETE FROM youtube_connections WHERE user_id = ?", (user_id,))
 
 
 def get_user_preferences(user_id: str) -> dict:

@@ -22,6 +22,7 @@ from app.services.database import (
     upsert_user_preferences,
 )
 from app.services.gmail_auth import get_connected_gmail_email, is_gmail_connected
+from app.services.youtube_auth import get_connected_youtube_channel, is_youtube_connected
 from app.services.tenant import TenantContext
 
 router = APIRouter(prefix="/api/auth")
@@ -127,6 +128,10 @@ async def get_me(user: Annotated[dict, Depends(get_current_user)]) -> dict:
         "gmail": {
             "connected": is_gmail_connected(tenant),
             "email": get_connected_gmail_email(user["id"]),
+        },
+        "youtube": {
+            "connected": is_youtube_connected(tenant),
+            "channel": get_connected_youtube_channel(user["id"]),
         },
     }
 

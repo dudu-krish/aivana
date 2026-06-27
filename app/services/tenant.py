@@ -52,3 +52,7 @@ class TenantContext:
     @property
     def gmail_token_file(self) -> Path:
         return self.credentials_dir / "gmail_token.json"
+
+    @property
+    def youtube_token_file(self) -> Path:
+        return self.credentials_dir / "youtube_token.json"

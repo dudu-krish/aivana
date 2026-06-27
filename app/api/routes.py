@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import (
@@ -32,20 +33,41 @@ from app.agents.perception import PerceptionAgent
 from app.agents.perception_registry import PERCEPTION_AGENTS, is_perception_agent
 from app.agents.understanding import UnderstandingAgent
 from app.agents.understanding_registry import UNDERSTANDING_AGENTS, is_understanding_agent
-from app.agents.whatsapp import WhatsAppAgent
+from app.agents.content_os import ContentAgent, ContentDirectorAgent
+from app.agents.content_registry import CONTENT_AGENTS, is_content_agent, is_content_director
 from app.api.deps import SESSION_COOKIE, get_current_user, get_tenant
+from app.config import settings
 from app.services.auth import resolve_session, resolve_ws_ticket
 from app.services.event_bus import event_bus
 from app.services.gmail_auth import (
     disconnect_gmail,
-    exchange_code_for_token,
-    get_authorization_url,
+    exchange_code_for_token as exchange_gmail_code,
+    get_authorization_url as get_gmail_authorization_url,
     get_connected_gmail_email,
     is_gmail_connected,
 )
+from app.services.youtube_auth import (
+    disconnect_youtube,
+    exchange_code_for_token as exchange_youtube_code,
+    get_authorization_url as get_youtube_authorization_url,
+    get_connected_youtube_channel,
+    is_youtube_connected,
+)
+from app.services.available_models import available_chat_models, available_audio_models, available_image_models, coerce_model
+from app.services.model_router import resolve_model
 from app.services.knowledge_base.service import KnowledgeBaseService
 from app.services.result_queue import clear_user_queue, get_result, latest_for_agent, list_results
 from app.services.run_context import current_run_id
+from app.services.run_control import (
+    AgentCancelledError,
+    cancel_all_for_user,
+    check_agent_cancelled,
+    clear_agent_cancel,
+    clear_workflow_cancel,
+    is_agent_cancelled,
+    request_cancel_agent,
+    request_cancel_workflow,
+)
 from app.services.tenant import TenantContext
 
 router = APIRouter(prefix="/api")
@@ -157,13 +179,102 @@ class KnowledgeBaseRunRequest(AgentRunContext):
     top_k: int = 8
 
 
+class ContentRunRequest(AgentRunContext):
+    agent_id: str
+    creator_type: str = "Tech Entrepreneur"
+    niche: str = ""
+    platforms: list[str] = []
+    goal: str = "Grow followers and leads"
+    context: dict[str, Any] | None = None
+    agent_config: dict[str, Any] | None = None
+
+
+class ContentDirectorRunRequest(AgentRunContext):
+    creator_type: str = "Content Creator"
+    niche: str = ""
+    platforms: list[str] = ["YouTube", "LinkedIn", "Twitter"]
+    goal: str = "Grow followers and leads"
+    agent_config: dict[str, Any] | None = None
+
+
+class HumanInputRespondRequest(BaseModel):
+    request_id: str
+    answers: dict[str, Any] = {}
+
+
+class WorkflowRunRequest(AgentRunContext):
+    task: str = ""
+    nodes: list[dict[str, Any]] = []
+    edges: list[dict[str, Any]] = []
+    agent_configs: dict[str, dict[str, Any]] | None = None
+    use_langchain: bool = True
+    skip_node_ids: list[str] = []
+    initial_context: dict[str, Any] | None = None
+
+
+class WorkflowCancelRequest(BaseModel):
+    run_id: str | None = None
+
+
+class AgentCancelRequest(BaseModel):
+    run_id: str | None = None
+
+
 def _run_key(user_id: str, agent_id: str) -> str:
     return f"{user_id}:{agent_id}"
 
 
 @router.get("/health")
 async def health() -> dict[str, str]:
-    return {"status": "ok"}
+    from app.services.langchain_llm import langchain_available
+
+    status = {"status": "ok"}
+    if langchain_available():
+        status["langchain"] = "available"
+    return status
+
+
+class ModelPickRequest(BaseModel):
+    agent_id: str = ""
+    text: str = ""
+    task: str = ""
+    prompt: str = ""
+    question: str = ""
+    connected_agents: list[str] = []
+    action: str = ""
+    source_size: int = 0
+    agent_config: dict[str, Any] | None = None
+
+
+@router.get("/models/available")
+async def models_available() -> dict[str, Any]:
+    return {
+        "chat": list(available_chat_models()),
+        "audio": list(available_audio_models()),
+        "image": list(available_image_models()),
+        "default": settings.planner_model,
+    }
+
+
+@router.post("/models/pick")
+async def models_pick(body: ModelPickRequest) -> dict[str, Any]:
+    pick = resolve_model(
+        body.agent_config,
+        agent_id=body.agent_id,
+        text=body.text,
+        task=body.task,
+        prompt=body.prompt,
+        question=body.question,
+        connected_agents=body.connected_agents,
+        action=body.action,
+        source_size=body.source_size,
+    )
+    return {
+        "model_id": pick.model_id,
+        "tier": pick.tier,
+        "score": pick.score,
+        "reason": pick.reason,
+    }
 
 
 @router.get("/events/history")
@@ -240,11 +351,41 @@ async def _run_agent(run_key: str, coro, run_id: str | None = None) -> None:
     token = None
     if run_id:
         token = current_run_id.set(run_id)
+
+    user_id, _, agent_id = run_key.partition(":")
+    clear_agent_cancel(user_id, agent_id)
     _running[run_key] = True
+    task = asyncio.create_task(coro)
     try:
-        await coro
+        while not task.done():
+            if is_agent_cancelled(user_id, agent_id):
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, AgentCancelledError):
+                    pass
+                await event_bus.emit(
+                    user_id,
+                    agent_id,
+                    agent_id.replace("-", " ").title(),
+                    "cancelled",
+                    "Agent stopped by user",
+                )
+                break
+            await asyncio.sleep(0.35)
+        else:
+            await task
+    except AgentCancelledError:
+        await event_bus.emit(
+            user_id,
+            agent_id,
+            agent_id.replace("-", " ").title(),
+            "cancelled",
+            "Agent stopped by user",
+        )
     finally:
         _running[run_key] = False
+        clear_agent_cancel(user_id, agent_id)
         if token is not None:
             current_run_id.reset(token)
 
@@ -364,7 +505,7 @@ async def gmail_auth_url(
 ) -> dict[str, str]:
     redirect_uri = f"{_public_base_url(request)}/api/gmail/callback"
     try:
-        url = get_authorization_url(user["id"], redirect_uri)
+        url = get_gmail_authorization_url(user["id"], redirect_uri)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"auth_url": url, "redirect_uri": redirect_uri}
@@ -469,7 +610,7 @@ async def gmail_callback(
 
     tenant = TenantContext(user_id=user["id"], email=user["email"], name=user["name"])
     try:
-        gmail_email = exchange_code_for_token(code, state, tenant)
+        gmail_email = exchange_gmail_code(code, state, tenant)
     except Exception as exc:
         return _oauth_result_page(
             "Gmail connection failed",
@@ -496,6 +637,129 @@ async def gmail_callback(
 @router.post("/gmail/disconnect")
 async def gmail_disconnect(tenant: Annotated[TenantContext, Depends(get_tenant)]) -> dict:
     disconnect_gmail(tenant)
+    return {"status": "disconnected"}
+
+
+@router.get("/youtube/setup")
+async def youtube_setup_info(request: Request) -> dict:
+    redirect = f"{_public_base_url(request)}/api/youtube/callback"
+    return {
+        "redirect_uri": redirect,
+        "credentials_found": bool(
+            settings.youtube_client_secrets_json.strip()
+            or settings.youtube_client_secrets_file.exists()
+            or settings.google_client_secrets_json.strip()
+            or settings.google_client_secrets_file.exists()
+        ),
+        "instructions": (
+            "Enable YouTube Data API v3 and YouTube Analytics API in Google Cloud Console. "
+            "Add the redirect_uri to your OAuth client's Authorized redirect URIs."
+        ),
+    }
+
+
+@router.get("/youtube/status")
+async def youtube_status(tenant: Annotated[TenantContext, Depends(get_tenant)]) -> dict:
+    channel = get_connected_youtube_channel(tenant.user_id)
+    return {
+        "connected": is_youtube_connected(tenant),
+        "channel": channel,
+    }
+
+
+@router.get("/youtube/auth-url")
+async def youtube_auth_url(
+    request: Request,
+    user: Annotated[dict, Depends(get_current_user)],
+) -> dict[str, str]:
+    redirect_uri = f"{_public_base_url(request)}/api/youtube/callback"
+    try:
+        url = get_youtube_authorization_url(user["id"], redirect_uri)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"auth_url": url, "redirect_uri": redirect_uri}
+
+
+@router.get("/youtube/callback")
+async def youtube_callback(
+    request: Request,
+    code: Annotated[str | None, Query()] = None,
+    state: Annotated[str | None, Query()] = None,
+    error: Annotated[str | None, Query()] = None,
+) -> HTMLResponse:
+    from app.services.database import get_user_by_id
+
+    dashboard_url = f"{_public_base_url(request)}/?youtube=connected"
+
+    if error:
+        return _oauth_result_page(
+            "YouTube connection cancelled",
+            f"Google returned: {error}",
+            _public_base_url(request),
+            success=False,
+        )
+
+    if not code or not state:
+        return _oauth_result_page(
+            "YouTube connection failed",
+            "Missing authorization code. Please try Connect YouTube again.",
+            _public_base_url(request),
+            success=False,
+        )
+
+    user_id_hint = None
+    try:
+        from app.services.database import get_db
+
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT user_id FROM oauth_states WHERE state = ?", (state,)
+            ).fetchone()
+            if row:
+                user_id_hint = row["user_id"]
+    except Exception:
+        pass
+
+    if not user_id_hint:
+        return _oauth_result_page(
+            "YouTube connection failed",
+            "OAuth session expired. Go back and click Connect YouTube again.",
+            _public_base_url(request),
+            success=False,
+        )
+
+    user_row = get_user_by_id(user_id_hint)
+    if not user_row:
+        return _oauth_result_page(
+            "YouTube connection failed",
+            "User session not found.",
+            _public_base_url(request),
+            success=False,
+        )
+
+    tenant = TenantContext(user_id=user_id_hint, email=user_row["email"], name=user_row["name"])
+    try:
+        channel = exchange_youtube_code(code, state, tenant)
+    except (ValueError, FileNotFoundError) as exc:
+        return _oauth_result_page(
+            "YouTube connection failed",
+            str(exc),
+            _public_base_url(request),
+            success=False,
+        )
+
+    title = channel.get("channel_title", "YouTube Channel")
+    return _oauth_result_page(
+        "YouTube connected",
+        f"<strong>{title}</strong> is now linked to CreatorOS.",
+        dashboard_url,
+        success=True,
+    )
+
+
+@router.post("/youtube/disconnect")
+async def youtube_disconnect(tenant: Annotated[TenantContext, Depends(get_tenant)]) -> dict:
+    disconnect_youtube(tenant)
     return {"status": "disconnected"}
 
 
@@ -773,6 +1037,191 @@ async def run_perception_agent(
     )
 
 
+@router.post("/agents/content/run", response_model=RunResponse)
+async def run_content_agent_route(
+    background_tasks: BackgroundTasks,
+    body: ContentRunRequest,
+    tenant: Annotated[TenantContext, Depends(get_tenant)],
+) -> RunResponse:
+    agent_id = body.agent_id.strip()
+    if not is_content_agent(agent_id) or is_content_director(agent_id):
+        raise HTTPException(status_code=404, detail=f"Unknown content agent: {agent_id}")
+
+    key = _run_key(tenant.user_id, agent_id)
+    if _running.get(key):
+        raise HTTPException(status_code=409, detail=f"{CONTENT_AGENTS[agent_id]['name']} is already running")
+
+    agent = ContentAgent(tenant, agent_id)
+    background_tasks.add_task(
+        _run_agent,
+        key,
+        agent.run(
+            creator_type=body.creator_type,
+            niche=body.niche or body.creator_type,
+            platforms=body.platforms or ["YouTube", "LinkedIn", "Twitter"],
+            goal=body.goal,
+            context=body.context or {},
+            agent_config=body.agent_config,
+        ),
+        body.run_id,
+    )
+    return RunResponse(
+        agent_id=agent_id,
+        status="started",
+        message=f"Running {CONTENT_AGENTS[agent_id]['name']}",
+    )
+
+
+@router.post("/agents/content-director/run", response_model=RunResponse)
+async def run_content_director(
+    background_tasks: BackgroundTasks,
+    body: ContentDirectorRunRequest,
+    tenant: Annotated[TenantContext, Depends(get_tenant)],
+) -> RunResponse:
+    agent_id = "content-director"
+    key = _run_key(tenant.user_id, agent_id)
+    if _running.get(key):
+        raise HTTPException(status_code=409, detail="Content Director is already running")
+
+    agent = ContentDirectorAgent(tenant)
+    background_tasks.add_task(
+        _run_agent,
+        key,
+        agent.run(
+            creator_type=body.creator_type,
+            niche=body.niche or body.creator_type,
+            platforms=body.platforms,
+            goal=body.goal,
+            agent_config=body.agent_config,
+        ),
+        body.run_id,
+    )
+    return RunResponse(
+        agent_id=agent_id,
+        status="started",
+        message="Running CreatorOS Content Director",
+    )
+
+
+@router.get("/agents/human-input/pending")
+async def list_pending_human_input(
+    tenant: Annotated[TenantContext, Depends(get_tenant)],
+) -> dict[str, Any]:
+    from app.services.human_input import list_pending
+
+    return {"pending": list_pending(tenant.user_id)}
+
+
+@router.post("/agents/human-input/respond")
+async def respond_human_input(
+    body: HumanInputRespondRequest,
+    tenant: Annotated[TenantContext, Depends(get_tenant)],
+) -> dict[str, str]:
+    from app.services.human_input import submit_human_input
+
+    ok = submit_human_input(tenant.user_id, body.request_id.strip(), body.answers)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Input request not found or already answered")
+    return {"status": "accepted", "message": "Response recorded — agent will continue"}
+
+
+@router.get("/content/generated-videos/{filename}")
+async def get_generated_video(
+    filename: str,
+    tenant: Annotated[TenantContext, Depends(get_tenant)],
+):
+    from fastapi.responses import FileResponse
+
+    from app.config import settings
+
+    safe = Path(filename).name
+    path = settings.data_dir / "generated_videos" / tenant.user_id / safe
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Video not found")
+    return FileResponse(path, media_type="video/mp4", filename=safe)
+
+
+@router.post("/workflows/run")
+async def run_workflow_engine(
+    body: WorkflowRunRequest,
+    tenant: Annotated[TenantContext, Depends(get_tenant)],
+) -> dict[str, Any]:
+    from app.config import settings
+    from app.services.langchain_workflow import run_workflow_langgraph
+
+    if not body.nodes:
+        raise HTTPException(status_code=400, detail="Workflow has no nodes")
+
+    clear_workflow_cancel(tenant.user_id, body.run_id)
+    task = body.task.strip() or "Run workflow"
+    prefer = body.use_langchain and settings.use_langchain
+    return await run_workflow_langgraph(
+        tenant,
+        task=task,
+        nodes=body.nodes,
+        edges=body.edges,
+        agent_configs=body.agent_configs or {},
+        prefer_langgraph=prefer,
+        skip_node_ids=body.skip_node_ids or [],
+        initial_context=body.initial_context or {},
+        run_id=body.run_id,
+    )
+
+
+@router.post("/workflows/cancel")
+async def cancel_workflow(
+    body: WorkflowCancelRequest,
+    tenant: Annotated[TenantContext, Depends(get_tenant)],
+) -> dict[str, str]:
+    cancel_all_for_user(tenant.user_id, body.run_id)
+    return {"status": "cancelled", "message": "Workflow stop requested"}
+
+
+@router.post("/agents/{agent_id}/cancel")
+async def cancel_agent(
+    agent_id: str,
+    body: AgentCancelRequest,
+    tenant: Annotated[TenantContext, Depends(get_tenant)],
+) -> dict[str, str]:
+    from app.services.human_input import cancel_pending_human_input
+
+    request_cancel_agent(tenant.user_id, agent_id)
+    if agent_id.startswith("content-") and agent_id != "content-director":
+        request_cancel_agent(tenant.user_id, "content-director")
+    if agent_id == "content-director":
+        from app.agents.content_registry import CONTENT_AGENTS
+
+        for cid in CONTENT_AGENTS:
+            request_cancel_agent(tenant.user_id, cid)
+    cancel_pending_human_input(tenant.user_id)
+    if body.run_id:
+        request_cancel_workflow(tenant.user_id, body.run_id)
+    return {"status": "cancelled", "agent_id": agent_id, "message": f"Stop requested for {agent_id}"}
+
+
+@router.post("/agents/cancel-all")
+async def cancel_all_agents(
+    body: WorkflowCancelRequest,
+    tenant: Annotated[TenantContext, Depends(get_tenant)],
+) -> dict[str, str]:
+    cancel_all_for_user(tenant.user_id, body.run_id)
+    from app.services.human_input import cancel_pending_human_input
+
+    cancel_pending_human_input(tenant.user_id)
+    from app.agents.content_registry import CONTENT_AGENTS
+    from app.agents.perception_registry import PERCEPTION_AGENTS
+    from app.agents.understanding_registry import UNDERSTANDING_AGENTS
+
+    agent_ids = [
+        "invoice-matcher", "gmail-organizer", "gmail-calendar", "telecaller",
+        "mailer", "whatsapp", "data-scraper", "file-download", "org-knowledge-base",
+        "content-director", *UNDERSTANDING_AGENTS, *PERCEPTION_AGENTS, *CONTENT_AGENTS,
+    ]
+    for aid in agent_ids:
+        request_cancel_agent(tenant.user_id, aid)
+    return {"status": "cancelled", "message": "All running agents stop requested"}
+
+
 def _normalize_kb_sources(sources: list[dict], folder_path: str) -> list[dict]:
     folder = folder_path.strip()
     if not sources:
@@ -922,4 +1371,8 @@ async def agents_status(user: Annotated[dict, Depends(get_current_user)]) -> dic
         status[agent_id] = _running.get(_run_key(uid, agent_id), False)
     for agent_id in PERCEPTION_AGENTS:
         status[agent_id] = _running.get(_run_key(uid, agent_id), False)
+    status["content-director"] = _running.get(_run_key(uid, "content-director"), False)
+    for agent_id in CONTENT_AGENTS:
+        if agent_id != "content-director":
+            status[agent_id] = _running.get(_run_key(uid, agent_id), False)
     return status

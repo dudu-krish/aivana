@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     # Heroku / CI: paste the full Google OAuth JSON (no file mount needed)
     google_client_secrets_json: str = ""
 
+    # Optional separate OAuth client for YouTube (falls back to google_* above)
+    youtube_client_secrets_file: Path = ROOT_DIR / "credentials" / "youtube_client_secret.json"
+    youtube_client_secrets_json: str = ""
+
     data_dir: Path = ROOT_DIR / "data"
     tenants_dir: Path = ROOT_DIR / "data" / "tenants"
     db_path: Path = ROOT_DIR / "data" / "agent.db"
@@ -48,6 +52,8 @@ class Settings(BaseSettings):
     planner_model: str = "gpt-4o-mini"
     planner_temperature: float = 0.2
     llm_timeout_seconds: int = 60
+    # Comma-separated chat model IDs your API key can call (auto-router + manual pick).
+    llm_available_models: str = "gpt-4.1,gpt-4.1-mini,gpt-4.1-nano,gpt-4o,gpt-4o-mini"
 
     # Scraper / file download
     scraper_user_agent: str = "AgentStudio/1.0 (+https://github.com/agent-studio)"
@@ -77,6 +83,19 @@ class Settings(BaseSettings):
     sharepoint_graph_base: str = "https://graph.microsoft.com/v1.0"
     sharepoint_site_url: str = ""
     sharepoint_access_token: str = ""
+
+    # LangChain — workflow engine and tool-calling agents
+    use_langchain: bool = True
+
+    # Google Gemini / Veo — intro video generation (set GEMINI_API_KEY in .env)
+    gemini_api_key: str = ""
+    gemini_project_id: str = ""
+    veo_model: str = "veo-3.1-fast-generate-preview"
+    veo_duration_seconds: int = 8
+    veo_aspect_ratio: str = "16:9"
+
+    # CreatorOS — pause production agents for human review (default on)
+    content_human_in_loop: bool = True
 
 
 settings = Settings()

@@ -22,6 +22,7 @@ from app.agents.base import BaseAgent
 from app.agents.perception_registry import PERCEPTION_AGENTS, agent_name
 from app.services.event_bus import event_bus
 from app.services.llm import LLMError, complete_json, llm_configured
+from app.services.model_router import apply_model_routing
 from app.config import settings
 from app.services.tenant import TenantContext
 
@@ -568,6 +569,12 @@ class PerceptionAgent(BaseAgent):
             kwargs.get("folder_path") or kwargs.get("source") or kwargs.get("text") or ""
         ).strip()
         agent_config = kwargs.get("agent_config") or {}
+        agent_config = apply_model_routing(
+            agent_config,
+            agent_id=self.agent_id,
+            text=source[:8000],
+            source_size=len(source),
+        )
 
         if not source:
             await self._emit(

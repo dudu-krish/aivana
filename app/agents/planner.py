@@ -11,6 +11,7 @@ from app.agents.perception_registry import PERCEPTION_AGENTS
 from app.agents.understanding_registry import UNDERSTANDING_AGENTS
 from app.services.event_bus import event_bus
 from app.services.llm import LLMError, complete_json, llm_configured
+from app.services.model_router import apply_model_routing
 from app.services.tenant import TenantContext
 
 AGENT_ID = "planner"
@@ -276,6 +277,14 @@ async def _llm_plan(
     agent_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     cfg = agent_config or {}
+    cfg = apply_model_routing(
+        cfg,
+        agent_id=AGENT_ID,
+        task=task,
+        prompt=str(cfg.get("prompt") or ""),
+        connected_agents=connected,
+        text=json.dumps(summaries, ensure_ascii=False)[:8000],
+    )
     system = PLANNER_SYSTEM_PROMPT
     custom_prompt = str(cfg.get("prompt") or "").strip()
     if custom_prompt:

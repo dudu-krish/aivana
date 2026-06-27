@@ -23,6 +23,9 @@ dependencies = [
     "numpy>=1.24.0",
     "sqlalchemy>=2.0.0",
     "gunicorn>=23.0.0",
+    "langchain-core>=0.3.0",
+    "langchain-openai>=0.2.0",
+    "langgraph>=0.2.0",
 ]
 
 [project.optional-dependencies]

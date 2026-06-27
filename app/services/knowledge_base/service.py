@@ -13,6 +13,7 @@ from app.services.knowledge_base.embedder import embed_texts
 from app.services.knowledge_base import sources as doc_sources
 from app.services.knowledge_base import turbovec_store as store
 from app.services.llm import LLMError, complete_json, llm_configured
+from app.services.model_router import apply_model_routing, resolve_model
 from app.services.tenant import TenantContext
 
 logger = logging.getLogger(__name__)
@@ -289,6 +290,13 @@ class KnowledgeBaseService:
         mode = "hierarchical_retrieval"
         if llm_configured():
             try:
+                pick = resolve_model(
+                    None,
+                    agent_id="org-knowledge-base",
+                    question=question,
+                    action="ask",
+                    text=context[:14000],
+                )
                 raw = await complete_json(
                     system=(
                         "You answer questions using ONLY the provided organization knowledge context. "
@@ -298,7 +306,7 @@ class KnowledgeBaseService:
                         "If the answer is not in the context, say you do not have enough information."
                     ),
                     user=json.dumps({"question": question, "context": context[:14000]}, ensure_ascii=False),
-                    model=settings.planner_model,
+                    model=pick.model_id,
                     temperature=0.1,
                 )
                 answer = str(raw.get("answer") or "")
