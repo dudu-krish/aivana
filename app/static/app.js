@@ -797,6 +797,13 @@ const AgentApp = (() => {
   async function connectYouTube() {
     const hint = document.getElementById("youtube-hint") || document.getElementById("sidebar-youtube-hint");
     try {
+      const setup = await api("/api/youtube/setup");
+      if (!setup?.credentials_found) {
+        throw new Error(
+          setup?.instructions
+            || "YouTube OAuth not configured on server. Set YOUTUBE_CLIENT_SECRETS_JSON on Render."
+        );
+      }
       const { auth_url, redirect_uri } = await api("/api/youtube/auth-url");
       if (!auth_url?.startsWith("https://accounts.google.com/")) {
         throw new Error("Invalid OAuth URL. Enable YouTube Data API v3 in Google Cloud Console.");
@@ -811,11 +818,10 @@ const AgentApp = (() => {
       let message = e.message || "YouTube connect failed";
       try {
         const setup = await api("/api/youtube/setup");
-        if (setup?.redirect_uri) {
-          message = `Google OAuth redirect mismatch. Add this exact URI in Google Cloud Console → Credentials → Authorized redirect URIs: ${setup.redirect_uri}`;
-          if (setup.oauth_client_id) {
-            message += ` (client: ${setup.oauth_client_id})`;
-          }
+        if (!setup?.credentials_found) {
+          message = setup.instructions || message;
+        } else if (setup?.redirect_uri) {
+          message = `YouTube OAuth error. In Google Cloud Console, add this redirect URI to OAuth client ${setup.oauth_client_id || "(YouTube)"}: ${setup.redirect_uri}`;
         }
       } catch { /* ignore */ }
       if (hint) {

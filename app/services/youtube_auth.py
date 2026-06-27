@@ -42,20 +42,21 @@ def _secrets_path():
     if yt_path.exists():
         return yt_path
 
-    raw_json = settings.google_client_secrets_json.strip()
-    if raw_json:
-        path = settings.data_dir / "credentials" / "client_secret.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(json.loads(raw_json)))
-        return path
+    raise FileNotFoundError(
+        "YouTube OAuth credentials not configured. "
+        "On Render, set YOUTUBE_CLIENT_SECRETS_JSON to your YouTube OAuth client JSON "
+        "(from credentials/youtube_client_secret.json). "
+        "Do not reuse GOOGLE_CLIENT_SECRETS_JSON — YouTube needs its own OAuth client "
+        "with https://aivana-65kg.onrender.com/api/youtube/callback in Authorized redirect URIs."
+    )
 
-    path = settings.google_client_secrets_file
-    if not path.exists():
-        raise FileNotFoundError(
-            f"YouTube OAuth credentials not found at {yt_path}. "
-            "Set YOUTUBE_CLIENT_SECRETS_FILE or use the same Google Cloud OAuth client as Gmail."
-        )
-    return path
+
+def get_credential_source() -> str:
+    if settings.youtube_client_secrets_json.strip():
+        return "youtube_client_secrets_json"
+    if settings.youtube_client_secrets_file.exists():
+        return "youtube_client_secrets_file"
+    return "missing"
 
 
 def get_oauth_client_id() -> str | None:

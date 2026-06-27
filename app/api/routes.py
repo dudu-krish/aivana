@@ -51,6 +51,7 @@ from app.services.youtube_auth import (
     exchange_code_for_token as exchange_youtube_code,
     get_authorization_url as get_youtube_authorization_url,
     get_connected_youtube_channel,
+    get_credential_source as get_youtube_credential_source,
     get_oauth_client_id as get_youtube_oauth_client_id,
     is_youtube_connected,
 )
@@ -668,25 +669,25 @@ async def gmail_disconnect(tenant: Annotated[TenantContext, Depends(get_tenant)]
 @router.get("/youtube/setup")
 async def youtube_setup_info(request: Request) -> dict:
     redirect = _youtube_redirect_uri(request)
-    client_id = get_youtube_oauth_client_id()
+    cred_source = get_youtube_credential_source()
+    client_id = get_youtube_oauth_client_id() if cred_source != "missing" else None
+    credentials_found = cred_source != "missing"
     return {
         "redirect_uri": redirect,
         "oauth_client_id": client_id,
-        "google_console_url": (
-            "https://console.cloud.google.com/apis/credentials"
-            if client_id
-            else None
-        ),
-        "credentials_found": bool(
-            settings.youtube_client_secrets_json.strip()
-            or settings.youtube_client_secrets_file.exists()
-            or settings.google_client_secrets_json.strip()
-            or settings.google_client_secrets_file.exists()
-        ),
+        "credential_source": cred_source,
+        "google_console_url": "https://console.cloud.google.com/apis/credentials",
+        "credentials_found": credentials_found,
         "instructions": (
-            "Enable YouTube Data API v3 and YouTube Analytics API in Google Cloud Console. "
-            f"Open Credentials → OAuth 2.0 Client ID {client_id or '(YouTube client)'} → "
-            "Authorized redirect URIs → add redirect_uri exactly (no trailing slash)."
+            "Enable YouTube Data API v3 and YouTube Analytics API. "
+            f"Set YOUTUBE_CLIENT_SECRETS_JSON on Render (not GOOGLE_CLIENT_SECRETS_JSON). "
+            f"Add redirect_uri to that OAuth client's Authorized redirect URIs. "
+            f"Expected YouTube client id ends with fenfc1s9ed… not the Gmail client."
+            if not credentials_found
+            else (
+                f"Open Credentials → OAuth client {client_id} → Authorized redirect URIs → "
+                f"add exactly: {redirect}"
+            )
         ),
     }
 
