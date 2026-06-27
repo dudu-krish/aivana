@@ -334,13 +334,20 @@ async def rule_video_creator(state: dict[str, Any]) -> dict[str, Any]:
             "human_input": human,
         }
 
+    agent_id = "content-video-creator"
     try:
+        await _emit_agent_progress(
+            user_id,
+            agent_id,
+            "Generating intro video with Gemini Veo — this usually takes 2–10 minutes…",
+        )
         video = await generate_veo_video(
             prompt,
             output_path=out_path,
             duration_seconds=settings.veo_duration_seconds,
             aspect_ratio=settings.veo_aspect_ratio,
         )
+        await _emit_agent_progress(user_id, agent_id, "Intro video generated successfully")
         return {
             "status": "generated",
             "intro_video": video.get("local_path"),
@@ -568,6 +575,19 @@ async def _review_hitl(
     name = agent_name(agent_id)
 
     await _emit_output_preview(user_id, agent_id, result)
+
+    if agent_id == "content-video-creator":
+        await _emit_agent_progress(
+            user_id,
+            agent_id,
+            "Review the Veo prompt below — choose Generate video or Skip (panel at bottom)",
+        )
+    else:
+        await _emit_agent_progress(
+            user_id,
+            agent_id,
+            f"{name} draft ready — approve or revise in the panel below",
+        )
 
     review = await request_human_input(
         user_id or "anonymous",

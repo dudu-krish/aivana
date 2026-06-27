@@ -41,6 +41,7 @@ const AgentApp = (() => {
   /** True while an agent is blocked on human input — prevents premature run completion */
   let hitlPauseActive = false;
   let pendingHitlRequest = null;
+  let hitlPollTimer = null;
 
   function isHitlBlocking() {
     return hitlPauseActive || !!pendingHitlRequest || !!window.__pendingHitlPayload;
@@ -489,6 +490,20 @@ const AgentApp = (() => {
     }
   }
 
+  function startHitlPolling() {
+    if (hitlPollTimer) return;
+    hitlPollTimer = setInterval(() => {
+      pollPendingHitl();
+    }, 4000);
+  }
+
+  function stopHitlPolling() {
+    if (hitlPollTimer) {
+      clearInterval(hitlPollTimer);
+      hitlPollTimer = null;
+    }
+  }
+
   async function pollPendingHitl() {
     try {
       const pending = await fetchPendingHitlList();
@@ -659,6 +674,7 @@ const AgentApp = (() => {
           ? "Approved — continuing workflow…"
           : "Thanks — generating draft (review panel will appear next)…",
       });
+      setTimeout(() => pollPendingHitl(), 500);
     } catch (err) {
       if (submitBtn) submitBtn.disabled = false;
       AgentStudio.logRunEntry({
@@ -1344,6 +1360,7 @@ const AgentApp = (() => {
     standaloneRunActive = false;
     workflowStopRequested = false;
     workflowAbortController = new AbortController();
+    startHitlPolling();
     AgentStudio.updateWorkflowControlButtons?.();
     return AgentStudio.startWorkflowRun(task, options);
   }
@@ -1352,6 +1369,7 @@ const AgentApp = (() => {
     workflowRunning = false;
     workflowStopRequested = false;
     workflowAbortController = null;
+    stopHitlPolling();
     AgentStudio.updateWorkflowControlButtons?.();
   }
 
