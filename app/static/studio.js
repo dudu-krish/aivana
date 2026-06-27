@@ -1271,7 +1271,7 @@ const AgentStudio = (() => {
       time: entry.time || new Date().toISOString(),
       resultId: entry.resultId || null,
     });
-    if (entry.type === "error" && run.status === "running") run.status = "failed";
+    if (entry.type === "error" && run.status === "running" && entry.agent !== "System") run.status = "failed";
     if (entry.type === "cancelled" && run.status === "running") run.status = "stopped";
     if (run.logs.length > 100) run.logs.shift();
     saveWorkflowRuns();

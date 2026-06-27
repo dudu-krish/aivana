@@ -38,10 +38,38 @@ const AgentApp = (() => {
     return id;
   }
 
+  /** True while an agent is blocked on human input — prevents premature run completion */
+  let hitlPauseActive = false;
+
   function maybeFinishStandaloneRun(status = "completed") {
-    if (!standaloneRunActive || workflowRunning) return;
+    if (!standaloneRunActive || workflowRunning || hitlPauseActive || pendingHitlRequest) return;
     AgentStudio.finishWorkflowRun(status);
     standaloneRunActive = false;
+  }
+
+  async function fetchPendingHitlList() {
+    try {
+      const res = await api("/api/agents/human-input/pending");
+      return (res?.pending || []).filter((p) => p?.request_id);
+    } catch {
+      return [];
+    }
+  }
+
+  function resolveAgentDisplayName(agentId, agentName) {
+    if (agentName) return agentName;
+    return AgentStudio.getAgent?.(agentId)?.name || agentId || "Agent";
+  }
+
+  function normalizeHitlPayload(raw) {
+    if (!raw || !raw.request_id) return null;
+    const agentId = raw.agent_id || "";
+    return {
+      ...raw,
+      agent_id: agentId,
+      agent_name: resolveAgentDisplayName(agentId, raw.agent_name),
+      questions: Array.isArray(raw.questions) ? raw.questions : [],
+    };
   }
 
   const $ = (sel) => document.querySelector(sel);
@@ -408,8 +436,17 @@ const AgentApp = (() => {
       } catch {
         return;
       }
+      if (!event || typeof event !== "object") return;
       if (event.type === "connected" || event.type === "pong") return;
-      handleEvent(event);
+      try {
+        handleEvent(event);
+      } catch (err) {
+        AgentStudio.logRunEntry?.({
+          agent: "System",
+          type: "error",
+          message: err?.message || "Failed to process live event",
+        });
+      }
     };
   }
 
@@ -426,31 +463,36 @@ const AgentApp = (() => {
 
   async function pollPendingHitl() {
     try {
-      const res = await api("/api/agents/human-input/pending");
-      const pending = res?.pending || [];
+      const pending = await fetchPendingHitlList();
       const bar = document.getElementById("hitl-resume-bar");
       const barText = document.getElementById("hitl-resume-text");
       if (!pending.length) {
+        hitlPauseActive = false;
         bar?.classList.add("hidden");
         return;
       }
-      const latest = pending[pending.length - 1];
-      if (!latest?.request_id) return;
+      const latest = normalizeHitlPayload(pending[pending.length - 1]);
+      if (!latest) return;
+      hitlPauseActive = true;
       const overlay = document.getElementById("hitl-overlay");
       const panelOpen = overlay && !overlay.classList.contains("hidden");
       if (!panelOpen) {
         if (bar) {
           bar.classList.remove("hidden");
           if (barText) {
-            barText.textContent = `${latest.agent_name || "Agent"} is waiting — ${latest.phase === "review" ? "review output" : "answer questions"}`;
+            barText.textContent = `${latest.agent_name} is waiting — ${latest.phase === "review" ? "review output" : "answer questions"}`;
           }
         }
         window.__pendingHitlPayload = latest;
       }
       if (pendingHitlRequest?.request_id === latest.request_id && panelOpen) return;
       showHitlPanel(latest);
-    } catch {
-      /* ignore */
+    } catch (err) {
+      AgentStudio.logRunEntry?.({
+        agent: "System",
+        type: "error",
+        message: err?.message || "Could not load pending input requests",
+      });
     }
   }
 
@@ -461,22 +503,32 @@ const AgentApp = (() => {
   }
 
   function showHitlPanel(payload) {
+    const normalized = normalizeHitlPayload(payload);
+    if (!normalized) return;
+
     const overlay = document.getElementById("hitl-overlay");
     const form = document.getElementById("hitl-form");
     const outputSection = document.getElementById("hitl-output-section");
     const outputPre = document.getElementById("hitl-output");
     if (!overlay || !form) return;
 
-    pendingHitlRequest = payload;
-    window.__pendingHitlPayload = payload;
+    pendingHitlRequest = normalized;
+    window.__pendingHitlPayload = normalized;
+    hitlPauseActive = true;
     document.getElementById("hitl-resume-bar")?.classList.add("hidden");
-    document.getElementById("hitl-title").textContent = payload.phase === "review"
-      ? "Review agent output"
-      : "Answer a few questions";
-    document.getElementById("hitl-agent").textContent = payload.agent_name || payload.agent_id || "";
-    document.getElementById("hitl-phase").textContent = payload.phase === "review" ? "Review" : "Input";
 
-    const draft = payload.draft_output;
+    const titleEl = document.getElementById("hitl-title");
+    const agentEl = document.getElementById("hitl-agent");
+    const phaseEl = document.getElementById("hitl-phase");
+    if (titleEl) {
+      titleEl.textContent = normalized.phase === "review"
+        ? "Review agent output"
+        : "Answer a few questions";
+    }
+    if (agentEl) agentEl.textContent = normalized.agent_name;
+    if (phaseEl) phaseEl.textContent = normalized.phase === "review" ? "Review" : "Input";
+
+    const draft = normalized.draft_output;
     if (draft && outputSection && outputPre) {
       outputSection.classList.remove("hidden");
       outputPre.textContent = JSON.stringify(draft, null, 2);
@@ -485,7 +537,8 @@ const AgentApp = (() => {
     }
 
     form.innerHTML = "";
-    (payload.questions || []).forEach((q) => {
+    normalized.questions.forEach((q) => {
+      if (!q?.id) return;
       const field = document.createElement("div");
       field.className = "hitl-field";
       const label = document.createElement("label");
@@ -524,6 +577,22 @@ const AgentApp = (() => {
     if (submitBtn) submitBtn.disabled = false;
   }
 
+  function minimizeHitlPanel() {
+    const overlay = document.getElementById("hitl-overlay");
+    if (overlay) {
+      overlay.classList.add("hidden");
+      overlay.setAttribute("aria-hidden", "true");
+    }
+    const req = pendingHitlRequest || window.__pendingHitlPayload;
+    if (!req) return;
+    const bar = document.getElementById("hitl-resume-bar");
+    const barText = document.getElementById("hitl-resume-text");
+    if (bar) bar.classList.remove("hidden");
+    if (barText) {
+      barText.textContent = `${req.agent_name || "Agent"} is waiting — click Respond now`;
+    }
+  }
+
   function hideHitlPanel() {
     const overlay = document.getElementById("hitl-overlay");
     if (overlay) {
@@ -531,6 +600,8 @@ const AgentApp = (() => {
       overlay.setAttribute("aria-hidden", "true");
     }
     pendingHitlRequest = null;
+    hitlPauseActive = false;
+    window.__pendingHitlPayload = null;
   }
 
   async function submitHitlResponse(e) {
@@ -571,18 +642,21 @@ const AgentApp = (() => {
 
   document.getElementById("hitl-form")?.addEventListener("submit", submitHitlResponse);
   document.getElementById("hitl-resume-btn")?.addEventListener("click", openHitlFromBar);
+  document.getElementById("hitl-minimize")?.addEventListener("click", minimizeHitlPanel);
 
   function handleEvent(event) {
-    const agentId = event.agent_id;
-    const agentName = event.agent_name;
-    const type = event.event_type;
+    if (!event || typeof event !== "object") return;
+
+    const agentId = event.agent_id || event.data?.agent_id || "";
+    const agentName = resolveAgentDisplayName(agentId, event.agent_name || event.data?.agent_name);
+    const type = event.event_type || event.type;
     const resultId = event.data?.result_id || null;
 
     AgentStudio.logRunEntry({
       agent: agentName,
       agentId,
       type,
-      message: event.message,
+      message: event.message || "",
       time: event.timestamp,
       resultId: (type === "completed" || type === "error") ? resultId : null,
     });
@@ -619,10 +693,14 @@ const AgentApp = (() => {
     if (type === "completed") {
       completedRuns++;
       const elapsed = runTimings[agentId] ? ((Date.now() - runTimings[agentId]) / 1000).toFixed(1) : null;
-      setAgentVisualStatus(agentId, "done", elapsed);
-      delete activeNodeRuns[agentId];
-      updateSuccessMetrics();
-      maybeFinishStandaloneRun("completed");
+      if (!hitlPauseActive && !pendingHitlRequest) {
+        setAgentVisualStatus(agentId, "done", elapsed);
+        delete activeNodeRuns[agentId];
+        updateSuccessMetrics();
+        maybeFinishStandaloneRun("completed");
+      } else {
+        setAgentVisualStatus(agentId, "running", elapsed);
+      }
 
       if (agentId === "invoice-matcher" && event.data) {
         AgentStudio.setMetricSuccess(
@@ -633,13 +711,17 @@ const AgentApp = (() => {
       }
     }
 
-    if (type === "awaiting_input" && event.data?.request_id) {
-      showHitlPanel(event.data);
-      setAgentVisualStatus(agentId, "running");
+    if (type === "awaiting_input") {
+      const hitlPayload = normalizeHitlPayload(event.data);
+      if (hitlPayload) {
+        showHitlPanel(hitlPayload);
+        setAgentVisualStatus(agentId || hitlPayload.agent_id, "running");
+      }
     }
 
-    if (type === "progress" && event.data?.hitl?.request_id) {
-      showHitlPanel(event.data.hitl);
+    if (type === "progress" && event.data?.hitl) {
+      const hitlPayload = normalizeHitlPayload(event.data.hitl);
+      if (hitlPayload) showHitlPanel(hitlPayload);
     }
 
     if (type === "agent_output" && event.data?.result) {
@@ -1514,13 +1596,38 @@ const AgentApp = (() => {
       const poll = async () => {
         if (workflowStopRequested) return resolve();
 
+        const pending = await fetchPendingHitlList();
+        if (pending.length) {
+          hitlPauseActive = true;
+          const latest = normalizeHitlPayload(pending[pending.length - 1]);
+          if (latest) {
+            const overlay = document.getElementById("hitl-overlay");
+            const panelOpen = overlay && !overlay.classList.contains("hidden");
+            if (!panelOpen) {
+              window.__pendingHitlPayload = latest;
+              document.getElementById("hitl-resume-bar")?.classList.remove("hidden");
+            }
+            if (!panelOpen || pendingHitlRequest?.request_id !== latest.request_id) {
+              showHitlPanel(latest);
+            }
+          }
+          setAgentVisualStatus(agentId, "running");
+          setTimeout(poll, 800);
+          return;
+        }
+        hitlPauseActive = false;
+
         const status = AgentStudio.getAgentStatus(agentId);
         if (status === "done" || status === "error" || status === "idle") return resolve();
 
         try {
-          await pollPendingHitl();
           const server = await api("/api/agents/status");
           if (server && server[agentId] === false) {
+            const stillPending = await fetchPendingHitlList();
+            if (stillPending.length) {
+              setTimeout(poll, 800);
+              return;
+            }
             const current = AgentStudio.getAgentStatus(agentId);
             if (current === "running") {
               const elapsed = runTimings[agentId]
