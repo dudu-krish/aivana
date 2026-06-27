@@ -795,16 +795,34 @@ const AgentApp = (() => {
   }
 
   async function connectYouTube() {
+    const hint = document.getElementById("youtube-hint") || document.getElementById("sidebar-youtube-hint");
     try {
-      const { auth_url } = await api("/api/youtube/auth-url");
+      const { auth_url, redirect_uri } = await api("/api/youtube/auth-url");
       if (!auth_url?.startsWith("https://accounts.google.com/")) {
         throw new Error("Invalid OAuth URL. Enable YouTube Data API v3 in Google Cloud Console.");
       }
-      const hint = document.getElementById("youtube-hint") || document.getElementById("sidebar-youtube-hint");
-      if (hint) hint.textContent = "Redirecting to Google sign-in…";
+      if (hint) {
+        hint.textContent = redirect_uri
+          ? `Redirecting to Google… (callback: ${redirect_uri})`
+          : "Redirecting to Google sign-in…";
+      }
       window.location.href = auth_url;
     } catch (e) {
-      AgentStudio.logRunEntry?.({ agent: "System", type: "error", message: e.message });
+      let message = e.message || "YouTube connect failed";
+      try {
+        const setup = await api("/api/youtube/setup");
+        if (setup?.redirect_uri) {
+          message = `Google OAuth redirect mismatch. Add this exact URI in Google Cloud Console → Credentials → Authorized redirect URIs: ${setup.redirect_uri}`;
+          if (setup.oauth_client_id) {
+            message += ` (client: ${setup.oauth_client_id})`;
+          }
+        }
+      } catch { /* ignore */ }
+      if (hint) {
+        hint.textContent = message;
+        hint.className = hint.id === "sidebar-youtube-hint" ? "connection-hint" : "prop-hint";
+      }
+      AgentStudio.logRunEntry?.({ agent: "System", type: "error", message });
     }
   }
 

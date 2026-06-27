@@ -121,3 +121,12 @@ def get_youtube_oauth_redirect_uri() -> str:
 def is_production_base_url(url: str) -> bool:
     u = url.strip().lower()
     return bool(u) and "localhost" not in u and "127.0.0.1" not in u
+
+
+def is_production_host(host: str) -> bool:
+    h = host.strip().lower().split(":")[0]
+    return bool(h) and "localhost" not in h and "127.0.0.1" not in h
+
+
+# Production Render deployment — used when env vars are not set yet.
+RENDER_APP_URL = "https://aivana-65kg.onrender.com"

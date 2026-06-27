@@ -58,6 +58,15 @@ def _secrets_path():
     return path
 
 
+def get_oauth_client_id() -> str | None:
+    try:
+        data = json.loads(_secrets_path().read_text())
+        web = data.get("web") or data.get("installed") or {}
+        return web.get("client_id") or None
+    except Exception:
+        return None
+
+
 def create_oauth_flow(redirect_uri: str) -> Flow:
     return Flow.from_client_secrets_file(
         str(_secrets_path()),

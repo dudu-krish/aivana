@@ -51,6 +51,7 @@ from app.services.youtube_auth import (
     exchange_code_for_token as exchange_youtube_code,
     get_authorization_url as get_youtube_authorization_url,
     get_connected_youtube_channel,
+    get_oauth_client_id as get_youtube_oauth_client_id,
     is_youtube_connected,
 )
 from app.services.available_models import available_chat_models, available_audio_models, available_image_models, coerce_model
@@ -524,11 +525,21 @@ def _public_base_url(request: Request) -> str:
 
 
 def _youtube_redirect_uri(request: Request) -> str:
-    from app.config import get_youtube_oauth_redirect_uri
+    from app.config import get_youtube_oauth_redirect_uri, is_production_host, settings
 
-    explicit = get_youtube_oauth_redirect_uri()
+    explicit = settings.youtube_oauth_redirect_uri.strip()
     if explicit:
         return explicit
+
+    host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or "").split(":")[0]
+    if is_production_host(host):
+        proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+        return f"{proto}://{host}/api/youtube/callback"
+
+    configured = get_youtube_oauth_redirect_uri()
+    if configured:
+        return configured
+
     return f"{_public_base_url(request)}/api/youtube/callback"
 
 
@@ -657,8 +668,15 @@ async def gmail_disconnect(tenant: Annotated[TenantContext, Depends(get_tenant)]
 @router.get("/youtube/setup")
 async def youtube_setup_info(request: Request) -> dict:
     redirect = _youtube_redirect_uri(request)
+    client_id = get_youtube_oauth_client_id()
     return {
         "redirect_uri": redirect,
+        "oauth_client_id": client_id,
+        "google_console_url": (
+            "https://console.cloud.google.com/apis/credentials"
+            if client_id
+            else None
+        ),
         "credentials_found": bool(
             settings.youtube_client_secrets_json.strip()
             or settings.youtube_client_secrets_file.exists()
@@ -667,7 +685,8 @@ async def youtube_setup_info(request: Request) -> dict:
         ),
         "instructions": (
             "Enable YouTube Data API v3 and YouTube Analytics API in Google Cloud Console. "
-            "Add the redirect_uri to your OAuth client's Authorized redirect URIs."
+            f"Open Credentials → OAuth 2.0 Client ID {client_id or '(YouTube client)'} → "
+            "Authorized redirect URIs → add redirect_uri exactly (no trailing slash)."
         ),
     }
 
