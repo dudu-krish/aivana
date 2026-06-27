@@ -512,10 +512,24 @@ async def gmail_auth_url(
 
 
 def _public_base_url(request: Request) -> str:
-    """Use the same host the user is on (works with ngrok)."""
+    """Prefer APP_BASE_URL in production; otherwise use the request host (ngrok, local)."""
+    from app.config import is_production_base_url, settings
+
+    configured = settings.app_base_url.strip().rstrip("/")
+    if is_production_base_url(configured):
+        return configured
     proto = request.headers.get("x-forwarded-proto", request.url.scheme)
     host = request.headers.get("x-forwarded-host") or request.headers.get("host", "")
     return f"{proto}://{host}".rstrip("/")
+
+
+def _youtube_redirect_uri(request: Request) -> str:
+    from app.config import get_youtube_oauth_redirect_uri
+
+    explicit = get_youtube_oauth_redirect_uri()
+    if explicit:
+        return explicit
+    return f"{_public_base_url(request)}/api/youtube/callback"
 
 
 def _oauth_result_page(title: str, message: str, dashboard_url: str, success: bool = True) -> HTMLResponse:
@@ -642,7 +656,7 @@ async def gmail_disconnect(tenant: Annotated[TenantContext, Depends(get_tenant)]
 
 @router.get("/youtube/setup")
 async def youtube_setup_info(request: Request) -> dict:
-    redirect = f"{_public_base_url(request)}/api/youtube/callback"
+    redirect = _youtube_redirect_uri(request)
     return {
         "redirect_uri": redirect,
         "credentials_found": bool(
@@ -672,7 +686,7 @@ async def youtube_auth_url(
     request: Request,
     user: Annotated[dict, Depends(get_current_user)],
 ) -> dict[str, str]:
-    redirect_uri = f"{_public_base_url(request)}/api/youtube/callback"
+    redirect_uri = _youtube_redirect_uri(request)
     try:
         url = get_youtube_authorization_url(user["id"], redirect_uri)
     except FileNotFoundError as exc:

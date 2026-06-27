@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     # Full OAuth redirect URI — set this in production (must match Google Console exactly).
     # Example: https://agents.yourcompany.com/api/gmail/callback
     oauth_redirect_uri: str = ""
+    # YouTube OAuth callback — production: https://aivana-65kg.onrender.com/api/youtube/callback
+    youtube_oauth_redirect_uri: str = ""
 
     google_client_secrets_file: Path = ROOT_DIR / "credentials" / "client_secret.json"
     # Heroku / CI: paste the full Google OAuth JSON (no file mount needed)
@@ -105,3 +107,17 @@ def get_oauth_redirect_uri() -> str:
     if settings.oauth_redirect_uri.strip():
         return settings.oauth_redirect_uri.strip()
     return f"{settings.app_base_url.rstrip('/')}/api/gmail/callback"
+
+
+def get_youtube_oauth_redirect_uri() -> str:
+    if settings.youtube_oauth_redirect_uri.strip():
+        return settings.youtube_oauth_redirect_uri.strip()
+    base = settings.app_base_url.rstrip("/")
+    if base and "localhost" not in base and "127.0.0.1" not in base:
+        return f"{base}/api/youtube/callback"
+    return ""
+
+
+def is_production_base_url(url: str) -> bool:
+    u = url.strip().lower()
+    return bool(u) and "localhost" not in u and "127.0.0.1" not in u

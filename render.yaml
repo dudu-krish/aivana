@@ -15,10 +15,14 @@ services:
       - key: APP_SECRET
         generateValue: true
       - key: APP_BASE_URL
-        sync: false
+        value: https://aivana-65kg.onrender.com
       - key: OAUTH_REDIRECT_URI
-        sync: false
+        value: https://aivana-65kg.onrender.com/api/gmail/callback
+      - key: YOUTUBE_OAUTH_REDIRECT_URI
+        value: https://aivana-65kg.onrender.com/api/youtube/callback
       - key: GOOGLE_CLIENT_SECRETS_JSON
+        sync: false
+      - key: YOUTUBE_CLIENT_SECRETS_JSON
         sync: false
       - key: OPENAI_API_KEY
         sync: false
